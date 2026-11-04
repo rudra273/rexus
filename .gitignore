@@ -1,0 +1,20 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Encrypted database backups — never commit
+backups/
+*.dump
+*.dump.enc
+
+# Build output
+/bin/
+/dist/
+web/dist/
+node_modules/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
