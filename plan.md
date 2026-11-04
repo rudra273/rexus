@@ -18,7 +18,7 @@ A technical tool for running and watching our projects. It runs on our own machi
 | **Vault** | Encrypted API keys / secrets per project. Reminds before a key expires. |
 | **Scheduler** | Cron jobs: ping websites, keep Supabase & other APIs awake, call webhooks, run checks. |
 | **Dashboard** | Health of every project: up/down, response time, SSL expiry, failed jobs, expiring keys. |
-| **Users & Roles** | Owner invites engineers; role-based permissions per component and per action. |
+| **Users & Roles** | Owner/Admin invite team members; 4 simple roles: Owner, Admin, Contributor, Viewer. |
 | **Alerts** | Notify on failures and upcoming expiries. |
 | **Backups** | Optional backup copy of the database to local / external storage, managed from the UI. |
 
@@ -137,12 +137,34 @@ rexus owner transfer --to other@company.com    # hand over ownership
 
 ---
 
-## 5. Roles & permissions (to finalize next)
+## 5. Roles & permissions (decided — kept simple)
 
-- Permissions are **per component, per action**, e.g. `vault.secret.list`, `vault.secret.reveal`, `cron.job.create`, `cron.job.run`, `project.settings.edit`.
-- Built-in roles: **Owner, Admin, Engineer, Viewer**.
-- Access can be scoped **per project** (e.g. Engineer on Project A, Viewer on Project B).
-- **Audit log** for every sensitive action — especially every secret reveal.
+**4 fixed roles, global.** One role per user; the role applies to all projects. No custom roles, no per-project permissions (for now).
+
+| Action | Owner | Admin | Contributor | Viewer |
+|---|:-:|:-:|:-:|:-:|
+| See dashboard & projects | ✅ | ✅ | ✅ | ✅ |
+| Create / edit / delete projects | ✅ | ✅ | ✅ | ❌ |
+| **Vault:** see secret names & expiry | ✅ | ✅ | ✅ | ✅ |
+| **Vault:** reveal / copy secret value | ✅ | ✅ | ✅ | ❌ |
+| **Vault:** add / edit / delete secrets | ✅ | ✅ | ✅ | ❌ |
+| **Scheduler:** see jobs & run history | ✅ | ✅ | ✅ | ✅ |
+| **Scheduler:** create / edit / run / delete jobs | ✅ | ✅ | ✅ | ❌ |
+| **Alerts:** configure channels (Telegram, Slack, …) | ✅ | ✅ | ❌ | ❌ |
+| **Backups:** backup now / interval / view | ✅ | ✅ | ❌ | ❌ |
+| Invite / disable / remove users | ✅ | ✅* | ❌ | ❌ |
+| Issue password-reset link / reset 2FA | ✅ | ✅* | ❌ | ❌ |
+| View audit log | ✅ | ✅ | ❌ | ❌ |
+| Manage Admins, transfer ownership | ✅ | ❌ | ❌ | ❌ |
+
+\* Admins can manage **Contributors and Viewers** only — not other Admins or the Owner.
+
+**Rules**
+- Exactly **one Owner**; can't be removed, disabled or blocked by any toggle.
+- Every **secret reveal and copy** is audit-logged, no matter who does it.
+- Permission checks happen on the **server** for every API call — the UI only hides buttons.
+
+**Later (only if needed):** per-project access (e.g. Contributor on Project A only).
 
 ---
 
@@ -259,7 +281,6 @@ Same binary / image everywhere — no code changes between environments.
 
 ## 12. Next decisions
 
-1. Roles & permissions matrix (who can do what).
-2. Data model / DB schema.
-3. Milestones & build order.
-4. License.
+1. Data model / DB schema.
+2. Milestones & build order.
+3. License.
