@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **High-level plan / decisions log.** Details (roles matrix, schema, milestones) get finalized next.
+Status: **Plan & decisions log — ready to start Phase 1** (see §13).
 
 ---
 
@@ -21,6 +21,30 @@ A technical tool for running and watching our projects. It runs on our own machi
 | **Users & Roles** | Owner/Admin invite team members; 4 simple roles: Owner, Admin, Contributor, Viewer. |
 | **Alerts** | Notify on failures and upcoming expiries. |
 | **Backups** | Optional backup copy of the database to local / external storage, managed from the UI. |
+
+### 1.1 Project identity
+
+Each project has two identifiers:
+
+| Identifier | Example | Set by | Can change? | Used for |
+|---|---|---|---|---|
+| **Internal ID** (UUID) | `7f3a9c2e-…` | Rexus (auto) | Never | DB relations only (internal). |
+| **Project key** | `acme-web` | User, at creation | Yes (rename) | URLs (`/projects/acme-web`), API, external tools. |
+
+External tools store the **project key** and call the API with it — e.g. `GET /api/projects/acme-web`.
+
+**Project key rules**
+- **Unique — can never be duplicated.** Enforced by a unique index in the database, not just the UI.
+- **Case-insensitive** uniqueness: `Acme-Web` and `acme-web` count as the same key (stored lowercase).
+- Format: lowercase letters, numbers, dashes; 2–40 chars; must start with a letter.
+- **Rename allowed** (Owner/Admin). Simple: the key just changes.
+  - The old key **stops working** immediately (API returns 404).
+  - The UI shows a warning before renaming: *"Tools using `old-key` (e.g. your CRM) must be updated."*
+- Every rename is audit-logged.
+
+**API lookup** uses the current project key only.
+
+**API tokens** (for external tools): Owner/Admin can create named, revocable tokens with a role (usually Viewer or Contributor). Token usage is audit-logged.
 
 **Out of scope for now**
 - Running our own mail server (see §8 — needed in future).
@@ -179,6 +203,40 @@ rexus owner transfer --to other@company.com    # hand over ownership
 
 Optional later: **seal/unseal** mode — after restart, vault stays locked until an admin enters the unseal passphrase.
 
+### 6.1 Vault structure
+
+```
+Project (acme-web)
+ ├─ Environment: dev
+ │   ├─ SUPABASE_URL
+ │   └─ STRIPE_KEY
+ ├─ Environment: staging
+ └─ Environment: prod
+```
+
+**Environments**
+- Every project gets **dev, staging, prod** by default.
+- Owner/Admin/Contributor can add more (e.g. `preview`, `qa`) or rename/remove them.
+- Secret names are unique **within an environment** (the same name can exist in dev and prod).
+
+**Secret fields**
+
+| Field | Notes |
+|---|---|
+| Name | e.g. `STRIPE_KEY`. Required. |
+| Value | Encrypted (see §6). Required. |
+| Expiry date | Optional. Drives expiry reminders. |
+| Notes | Optional free text (e.g. "rotate via Stripe dashboard"). |
+| Tags | Optional, e.g. `payment`, `third-party`. Used for filtering. |
+| **Custom fields** | Users can add their own fields (e.g. `owner`, `provider`, `dashboard_url`) as name → value. Not encrypted — don't put secrets in them. |
+
+**Version history**
+- Every change to a secret's value creates a **new version** (v1, v2, v3…). Old versions are kept.
+- History shows: version, who changed it, when.
+- Old values can be **revealed** (same permission as reveal; audit-logged) and **restored**.
+- Restore = creates a new version with the old value (history is never rewritten).
+- Deleting a secret deletes all its versions (with confirmation; audit-logged).
+
 ---
 
 ## 7. Scheduler
@@ -194,6 +252,29 @@ Built into the Go binary. Jobs are **typed**, not free-form shell:
 
 Each job has: run history, duration, logs, retries, timeout, alert on failure, and a **catch-up policy** for runs missed while the host was off/asleep. Schedule state lives in the DB so restarts are safe.
 
+**One engine, two kinds of jobs:**
+- **User jobs** — cron jobs users create (keepalive, webhook, ping). Hidden when `REXUS_MODULE_SCHEDULER=false`.
+- **System jobs** — health checks, expiry reminders, backups. Always run by the same engine (backups only if enabled).
+
+### 7.1 Health checks (configurable per check in the UI)
+
+Each project can have one or more health checks. Every setting is configurable:
+
+| Setting | Example / default |
+|---|---|
+| URL + method | `GET https://acme.com/health` |
+| Interval | `1m` (default 5m) |
+| Timeout | `10s` |
+| **Status code** | Expected: `200`, or a list/range like `200-299` |
+| **Response time** | Warn if slower than e.g. `2000ms` |
+| **SSL expiry** | Warn N days before the certificate expires (default 14) |
+| **Down threshold** | Mark **down** after N failures in a row (default 3) |
+| **Recovery threshold** | Mark **up** again after N successes in a row (default 1) |
+
+**Project status** (shown on the dashboard) = worst status of its checks: 🟢 Up · 🟡 Degraded (slow / SSL expiring) · 🔴 Down · ⚪ No checks.
+
+Dashboard shows per check: current status, uptime %, response-time chart, last check time, SSL expiry date.
+
 ---
 
 ## 8. Alerts & mail
@@ -201,6 +282,34 @@ Each job has: run history, duration, logs, retries, timeout, alert on failure, a
 **Now:** no mail server. Outgoing notifications via:
 - Any **SMTP relay** (Resend, Gmail SMTP, SES, etc.) — optional.
 - **Telegram, Discord, Slack** webhooks.
+
+### 8.1 Alert setup (configurable in the UI, Owner/Admin)
+
+**Channels — global.** Owner/Admin add one or more channels (e.g. one Telegram group, one Slack channel). All alerts go to the global channels.
+
+**Events — user chooses which ones send alerts:**
+
+| Event | Default |
+|---|---|
+| Site / health check **down** | On |
+| Site **recovered** (back up) | On |
+| Site **degraded** (slow response) | Off |
+| **SSL certificate** expiring | On |
+| **Secret / API key** expiring (days before: default `30, 7, 1`) | On |
+| **User job failed** | On |
+| **Backup failed** | On |
+| New user login / new device | Off |
+
+**Every alert message includes the project info + a link:**
+```
+🔴 DOWN — Acme Web (acme-web)
+Check: GET https://acme.com/health → timeout after 10s (3 failures in a row)
+Since: 2026-11-05 14:32
+Open: https://rexus.company.com/projects/acme-web
+```
+
+- No duplicate spam: one alert when the state changes (down → up), not on every failed check.
+- A **Send test alert** button for each channel.
 
 **Future (planned for sure):** a proper mail system. Approach to be decided later — e.g. integrating an existing open-source mail server (like Stalwart) on a VPS, or IMAP-based inbox. Not self-hosting SMTP from a laptop (blocked port 25, blacklisted residential IPs).
 
@@ -275,12 +384,121 @@ Same binary / image everywhere — no code changes between environments.
 
 - Public repo, self-hostable by any company.
 - One install = one company; branding via env vars.
-- License: TBD.
+- License: **MIT** — added later, before the first public release. Build the app first.
 
 ---
 
-## 12. Next decisions
+## 12. Data model (high level)
 
-1. Data model / DB schema.
-2. Milestones & build order.
-3. License.
+All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are stored **hashed**, never in plain text.
+
+**Users & access**
+
+| Table | Key columns |
+|---|---|
+| `users` | email (unique, case-insensitive), name, password_hash (Argon2id), role (`owner`/`admin`/`contributor`/`viewer`), totp_secret (encrypted), totp_enabled, status (`active`/`disabled`), last_login_at |
+| `invites` | email, role, token_hash, invited_by, expires_at, used_at |
+| `sessions` | user_id, token_hash, ip, user_agent, expires_at, revoked_at |
+| `password_resets` | user_id, token_hash, expires_at, used_at |
+| `api_tokens` | name, token_hash, role, created_by, last_used_at, expires_at, revoked_at |
+
+**Projects & vault**
+
+| Table | Key columns |
+|---|---|
+| `projects` | key (unique, lowercase), name, description, created_by |
+| `environments` | project_id, name — unique (project_id, name) |
+| `secrets` | environment_id, name, expires_at, notes, tags (text[]), custom_fields (jsonb), current_version — unique (environment_id, name) |
+| `secret_versions` | secret_id, version, ciphertext, nonce, wrapped_data_key, created_by — unique (secret_id, version) |
+
+**Scheduler & health**
+
+| Table | Key columns |
+|---|---|
+| `jobs` | project_id (optional), name, type, schedule (cron), config (jsonb), enabled, timeout, retries, next_run_at, last_run_at |
+| `job_runs` | job_id, started_at, finished_at, status, duration_ms, output / error |
+| `health_checks` | project_id, name, url, method, interval, timeout, expected_status, max_response_ms, ssl_warn_days, down_threshold, recovery_threshold, current status, consecutive failures/successes, ssl_expires_at, last_checked_at |
+| `health_results` | check_id, checked_at, ok, status_code, response_ms, error (old rows pruned automatically) |
+
+**Alerts, backups, system**
+
+| Table | Key columns |
+|---|---|
+| `alert_channels` | type (`telegram`/`discord`/`slack`/`email`), name, config (encrypted — webhook URLs are sensitive), enabled |
+| `alert_events` | event, enabled, options (jsonb, e.g. reminder days) |
+| `alerts_sent` | event, project_id, channel_id, message, status, sent_at |
+| `backups` | file_name, size, status, error, trigger (`manual`/`scheduled`), triggered_by, started_at, finished_at |
+| `settings` | key, value (jsonb) — e.g. backup interval, keep-last-N |
+| `audit_log` | at, actor (user or API token), action, target_type, target_id, ip, details (jsonb) |
+
+---
+
+## 13. Build phases
+
+Each phase ends with something **working and usable**. Phases are small so the AI can build and test them one at a time.
+
+### Phase 1 — Foundation + keepalive pings (first useful version)
+**Goal:** run Rexus, log in, add projects, and keep Supabase / APIs awake.
+- Go project skeleton, React UI embedded in the binary, `Dockerfile` + `docker-compose.yml` (Rexus + Postgres).
+- Env config + toggles (§3) with validation; `.env.example`.
+- DB migrations on start.
+- Owner setup — **UI (setup code) + CLI** (`rexus owner create/reset`).
+- Login: email + password + 2FA (TOTP), sessions, logout, rate limiting.
+- Projects: create / edit / delete, unique project key, rename.
+- Scheduler engine + user jobs: **HTTP ping / keepalive** (URL, method, cron schedule, timeout, retries).
+- Job run history (status, duration, error) in the UI.
+- Audit log written from day one (UI comes in Phase 3).
+
+**Done when:** `docker compose up` → create owner → add project → add a keepalive job for Supabase → see it run on schedule and survive a restart.
+
+### Phase 2 — Vault
+- Master-key envelope encryption (§6).
+- Environments per project (dev / staging / prod + custom).
+- Secrets: name, value, expiry, notes, tags, custom fields.
+- Reveal / copy (audit-logged), version history, restore.
+- Search / filter by tag, environment, expiry.
+
+**Done when:** all project keys are stored in Rexus, encrypted in the DB, with history.
+
+### Phase 3 — Team
+- Invites (link; emailed if SMTP set, else copy), roles: Owner / Admin / Contributor / Viewer.
+- Permission checks on every API call (§5).
+- User management: disable, remove, role change, password-reset link, reset 2FA.
+- Lockdown mode, IP allowlist, 2FA mode toggles enforced.
+- Audit log page (Owner/Admin).
+
+**Done when:** engineers can be invited and see only what their role allows.
+
+### Phase 4 — Health checks & dashboard
+- Configurable health checks (§7.1): status code, response time, SSL expiry, down/recovery thresholds.
+- Project status (up / degraded / down) and dashboard: overview of all projects, uptime %, response-time chart, expiring secrets list, failed jobs.
+
+**Done when:** one screen shows the health of every project.
+
+### Phase 5 — Alerts
+- Global channels: Telegram, Discord, Slack, email (SMTP relay).
+- Configurable events (§8.1), messages with project info + link, no duplicate spam, test button.
+- Secret expiry reminders, SSL expiry, job failed, site down/recovered.
+
+**Done when:** a site going down or a key about to expire sends a message to the team channel.
+
+### Phase 6 — Backups
+- `REXUS_BACKUP_ENABLED` + `REXUS_BACKUP_DIR`, `pg_dump` backups.
+- Backups page: Backup now, interval, keep-last-N, list; always-visible "Last backup" indicator.
+- Restore via CLI + setup screen when DB is empty; backup-failed alert.
+
+**Done when:** backups run on schedule to a local/external folder and can be restored into an empty DB.
+
+### Phase 7 — API & external tools
+- API tokens (create / revoke, role-based, audit-logged).
+- Public REST API by project key (project info, health, jobs, expiring secrets — no secret values unless the token's role allows).
+- API docs page.
+
+**Done when:** an external tool (e.g. a CRM) can fetch a project's status using its project key.
+
+### Later (not planned in detail yet)
+- Mail system (§8).
+- Cloud backup targets (S3 / R2 / Backblaze / Drive).
+- Vault seal/unseal mode.
+- Per-project access.
+- MIT license + public open-source release.
