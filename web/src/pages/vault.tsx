@@ -181,7 +181,7 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
   )
 }
 
-export function SecretRow({ secret, services, showService, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
+export function SecretRow({ secret, services, showService, showProject, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; showProject?: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
   const [moving, setMoving] = useState(false)
   const [value, setValue] = useState<{ text: string; label: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -268,16 +268,19 @@ export function SecretRow({ secret, services, showService, writable, onEdit, onC
     }
   }
 
+  const ib = 'rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
   const link = 'text-xs text-zinc-400 hover:text-zinc-100'
   const fields = Object.entries(secret.custom_fields)
 
   return (
-    <Card className="p-4">
+    <Card className={cx('border-l-[3px] p-4', expiryAccent(secret))}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-zinc-100 mono">{secret.name}</span>
+            {showProject && <Link to={`/projects/${secret.project_key}`} className="text-xs text-zinc-400 hover:text-zinc-200 hover:underline">{secret.project_name}</Link>}
             {showService && <ServiceBadge r={secret} />}
+            <Badge>{secret.environment}</Badge>
             <Badge>v{secret.current_version}</Badge>
             <ExpiryBadge secret={secret} />
             {secret.tags.map((t) => (
@@ -287,13 +290,17 @@ export function SecretRow({ secret, services, showService, writable, onEdit, onC
           <div className="mt-1 text-xs text-zinc-500">updated {timeAgo(secret.updated_at)}{secret.updated_by ? ` by ${secret.updated_by}` : ''}</div>
         </div>
         {writable && (
-          <div className="flex flex-wrap items-center gap-3">
-            {value ? <button className={link} onClick={() => setValue(null)}>Hide</button> : <button className={link} onClick={() => reveal()}>Reveal</button>}
-            <button className={link} onClick={copy}>Copy</button>
-            <button className={link} onClick={toggleHistory}>{showHistory ? 'Hide history' : 'History'}</button>
-            <button className={link} onClick={onEdit}>Edit</button>
-            {(services.length > 0 || secret.service_id) && <button className={link} onClick={() => setMoving(true)}>Move</button>}
-            <button className={cx(link, 'hover:!text-red-400')} onClick={remove}>Delete</button>
+          <div className="flex items-center gap-0.5">
+            {value ? (
+              <button className={ib} title="Hide" aria-label="Hide" onClick={() => setValue(null)}><Icon name="eyeoff" /></button>
+            ) : (
+              <button className={ib} title="Reveal" aria-label="Reveal" onClick={() => reveal()}><Icon name="eye" /></button>
+            )}
+            <button className={ib} title="Copy value" aria-label="Copy value" onClick={copy}><Icon name="copy" /></button>
+            <button className={cx(ib, showHistory && 'bg-zinc-800 text-zinc-100')} title="History" aria-label="History" onClick={toggleHistory}><Icon name="history" /></button>
+            <button className={ib} title="Edit" aria-label="Edit" onClick={onEdit}><Icon name="edit" /></button>
+            {(services.length > 0 || secret.service_id) && <button className={ib} title="Move" aria-label="Move" onClick={() => setMoving(true)}><Icon name="move" /></button>}
+            <button className={cx(ib, 'hover:!text-red-400')} title="Delete" aria-label="Delete" onClick={remove}><Icon name="trash" /></button>
           </div>
         )}
       </div>
@@ -558,6 +565,76 @@ function matches(sel: Sel, s: Secret): boolean {
   }
 }
 
+type IconName = 'folder' | 'box' | 'key' | 'alert' | 'clock' | 'chevron' | 'layers' | 'eye' | 'eyeoff' | 'copy' | 'history' | 'edit' | 'move' | 'trash'
+const ICON_PATHS: Record<IconName, React.ReactNode> = {
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,
+  box: (
+    <>
+      <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" />
+      <path d="m3 8 9 5 9-5M12 13v8" />
+    </>
+  ),
+  layers: (
+    <>
+      <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 13 9 5 9-5" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8" cy="15" r="4" />
+      <path d="m11 12 9-9m-3 3 3 3m-6-0 2 2" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M12 3 2 20h20L12 3Z" />
+      <path d="M12 10v4m0 3h.01" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  chevron: <path d="m9 6 6 6-6 6" />,
+  eye: (
+    <>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  eyeoff: (
+    <>
+      <path d="M3 3l18 18M10.6 6.1A9.6 9.6 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.3 4M6.6 7.6A16 16 0 0 0 2 12s3.5 7 10 7c1.7 0 3.2-.4 4.5-1" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </>
+  ),
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5M12 7v5l3 2" />
+    </>
+  ),
+  edit: <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" />,
+  move: <path d="M5 12h14m-5-5 5 5-5 5M5 5v14" />,
+  trash: <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m5 5v6m4-6v6" />,
+}
+function Icon({ name, className }: { name: IconName; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={cx('inline-block h-4 w-4 shrink-0', className)} aria-hidden="true">
+      {ICON_PATHS[name]}
+    </svg>
+  )
+}
+
 /** Row accent by urgency: red = expired or ≤7d, amber = ≤30d. */
 function expiryAccent(s: Pick<Secret, 'days_left'>): string {
   if (s.days_left == null) return 'border-l-transparent'
@@ -597,43 +674,30 @@ function TreeButton({ active, depth = 0, count, onClick, children, open, onToggl
       className={cx('flex items-center gap-1 rounded-md pr-2 text-sm', active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200')}
       style={{ paddingLeft: 6 + depth * 14 }}
     >
-      <button type="button" onClick={onToggle} className={cx('w-4 text-xs text-zinc-500', !onToggle && 'invisible')} aria-label={open ? 'Collapse' : 'Expand'}>
-        {open ? '▾' : '▸'}
+      <button type="button" onClick={onToggle} className={cx('flex w-4 justify-center text-zinc-500 hover:text-zinc-200', !onToggle && 'invisible')} aria-label={open ? 'Collapse' : 'Expand'}>
+        <Icon name="chevron" className={cx('h-3 w-3 transition-transform', open && 'rotate-90')} />
       </button>
       <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center justify-between gap-2 py-1.5 text-left">
-        <span className="truncate">{children}</span>
+        <span className="flex min-w-0 items-center gap-2 truncate">{children}</span>
         {count != null && <span className="text-xs text-zinc-500">{count}</span>}
       </button>
     </div>
   )
 }
 
-function SecretDetail({ secret, onChanged }: { secret: Secret; onChanged: () => void }) {
+/** Edit dialog wrapper for a secret listed on the global page (needs that project's services). */
+function EditSecret({ secret, onClose, onSaved }: { secret: Secret; onClose: () => void; onSaved: () => void }) {
+  const { services } = useServices(secret.project_key)
+  if (!services) return null
+  return <SecretForm environmentId={secret.environment_id} services={services} defaultService="" existing={secret} onClose={onClose} onSaved={onSaved} />
+}
+
+/** A secret card on the global page; loads its project's services for the Move dialog. */
+function VaultSecret({ secret, showProject, onEdit, onChanged }: { secret: Secret; showProject: boolean; onEdit: () => void; onChanged: () => void }) {
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
   const { services } = useServices(secret.project_key)
-  const [editing, setEditing] = useState(false)
-  return (
-    <div>
-      <div className="mb-2 text-xs text-zinc-500">
-        <Link to={`/projects/${secret.project_key}`} className="hover:text-zinc-300 hover:underline">Open {secret.project_name} →</Link>
-      </div>
-      <SecretRow key={secret.id} secret={secret} services={services ?? []} showService writable={writable} onEdit={() => setEditing(true)} onChanged={onChanged} />
-      {editing && (
-        <SecretForm
-          environmentId={secret.environment_id}
-          services={services ?? []}
-          defaultService=""
-          existing={secret}
-          onClose={() => setEditing(false)}
-          onSaved={() => {
-            setEditing(false)
-            onChanged()
-          }}
-        />
-      )}
-    </div>
-  )
+  return <SecretRow secret={secret} services={services ?? []} showService showProject={showProject} writable={writable} onEdit={onEdit} onChanged={onChanged} />
 }
 
 /** "+ Add secret here": picks the environment if needed, then opens the regular form pre-filled with the folder's service. */
@@ -737,6 +801,7 @@ export function VaultPage() {
   const [reloadKey, setReloadKey] = useState(0)
   const [finding, setFinding] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Secret | null>(null)
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
 
@@ -782,7 +847,6 @@ export function VaultPage() {
       : (a, b) => a.name.localeCompare(b.name) || a.environment.localeCompare(b.environment),
   )
   if (sel.kind === 'recent') list = list.slice(0, 25)
-  const selected = list.find((s) => s.id === selectedId) ?? null
 
   const expSoon = all.filter((s) => s.days_left != null && s.days_left <= 30).length
   const expired = all.filter((s) => s.days_left != null && s.days_left < 0).length
@@ -812,7 +876,7 @@ export function VaultPage() {
 
   return (
     <>
-      <PageHeader title="Vault" subtitle="Browse secrets by project and service. Select one to reveal, copy, edit or restore it."
+      <PageHeader title="Vault" subtitle="Browse secrets by project and service. Select a folder to see its secrets. Press ⌘K to jump to one."
         actions={<Button variant="secondary" onClick={() => setFinding(true)}>Quick find <span className="ml-1 text-xs text-zinc-500">⌘K</span></Button>}
       />
 
@@ -852,7 +916,7 @@ export function VaultPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[230px_minmax(0,1fr)]">
           {/* folder tree */}
           <Card className="h-fit p-2">
-            <TreeButton active={sel.kind === 'all'} count={all.length} onClick={() => choose({ kind: 'all' })}>All secrets</TreeButton>
+            <TreeButton active={sel.kind === 'all'} count={all.length} onClick={() => choose({ kind: 'all' })}><Icon name="layers" className="text-zinc-500" />All secrets</TreeButton>
             <div className="mt-1 space-y-0.5">
               {tree.map((p) => {
                 const open = isOpen(p.key)
@@ -869,7 +933,7 @@ export function VaultPage() {
                         setOpenProjects((c) => new Set(c).add(p.key))
                       }}
                     >
-                      📁 {p.name}<ExpiryDot list={p.secrets} />
+                      <Icon name="folder" className="text-zinc-500" />{p.name}<ExpiryDot list={p.secrets} />
                     </TreeButton>
                     {open &&
                       svcs.map(([sk, sv]) => (
@@ -880,7 +944,7 @@ export function VaultPage() {
                           count={sv.secrets.length}
                           onClick={() => choose({ kind: 'service', project: p.key, service: sk })}
                         >
-                          {sk === PROJECT_LEVEL ? <span className="italic">project-level</span> : <>📦 {sv.name}</>}<ExpiryDot list={sv.secrets} />
+                          {sk === PROJECT_LEVEL ? <span className="italic">project-level</span> : <><Icon name="box" className="text-zinc-500" />{sv.name}</>}<ExpiryDot list={sv.secrets} />
                         </TreeButton>
                       ))}
                   </div>
@@ -888,8 +952,8 @@ export function VaultPage() {
               })}
             </div>
             <div className="my-2 border-t border-zinc-800" />
-            <TreeButton active={sel.kind === 'expiring'} count={expSoon} onClick={() => choose({ kind: 'expiring' })}>⚠ Expiring soon</TreeButton>
-            <TreeButton active={sel.kind === 'recent'} onClick={() => choose({ kind: 'recent' })}>🕑 Recently changed</TreeButton>
+            <TreeButton active={sel.kind === 'expiring'} count={expSoon} onClick={() => choose({ kind: 'expiring' })}><Icon name="alert" className="text-amber-400" />Expiring soon</TreeButton>
+            <TreeButton active={sel.kind === 'recent'} onClick={() => choose({ kind: 'recent' })}><Icon name="clock" className="text-zinc-500" />Recently changed</TreeButton>
           </Card>
 
           {/* list + detail */}
@@ -928,43 +992,28 @@ export function VaultPage() {
             {list.length === 0 ? (
               <Empty title="Nothing here">No secrets match this folder.{writable && folderProject ? ' Use “+ Add secret here” to create one.' : ''}</Empty>
             ) : (
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-                <Card className="h-fit overflow-hidden">
-                  <ul className="divide-y divide-zinc-800/70">
-                    {list.map((s) => (
-                      <li key={s.id}>
-                        <button
-                          onClick={() => setSelectedId(s.id)}
-                          className={cx('flex w-full items-center justify-between gap-3 border-l-[3px] px-4 py-2.5 text-left', expiryAccent(s), s.id === selectedId ? 'bg-zinc-800/70' : 'hover:bg-zinc-800/30')}
-                        >
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm text-zinc-100 mono">🔑 {s.name}</span>
-                            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
-                              {sel.kind !== 'service' && <span>{s.project_name}</span>}
-                              <ServiceBadge r={s} />
-                              <Badge>{s.environment}</Badge>
-                              {s.tags.map((t) => <Badge key={t} tone="sky">{t}</Badge>)}
-                            </span>
-                          </span>
-                          <ExpiryBadge secret={s} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </Card>
-                <div className="min-w-0">
-                  {selected ? (
-                    <SecretDetail secret={selected} onChanged={() => setReloadKey((k) => k + 1)} />
-                  ) : (
-                    <Empty title="Select a secret">Pick one from the list to reveal, copy, edit or view its history.</Empty>
-                  )}
-                </div>
+              <div className="space-y-2">
+                {list.map((s) => (
+                  <div key={s.id} className={cx('rounded-lg', s.id === selectedId && 'ring-1 ring-emerald-600/60')}>
+                    <VaultSecret secret={s} showProject={sel.kind !== 'service'} onEdit={() => setEditing(s)} onChanged={() => setReloadKey((k) => k + 1)} />
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
       )}
 
+      {editing && (
+        <EditSecret
+          secret={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            setReloadKey((k) => k + 1)
+          }}
+        />
+      )}
       {finding && <QuickFind secrets={all} onPick={pick} onClose={() => setFinding(false)} />}
       {adding && folderProject && (
         <AddSecretHere
