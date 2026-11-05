@@ -184,15 +184,31 @@ func (s *Store) CreateRun(ctx context.Context, jobID, trigger string) (string, e
 	return id, err
 }
 
-func (s *Store) FinishRun(ctx context.Context, r *JobRun) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE job_runs SET status = $2, attempts = $3, status_code = $4, duration_ms = $5,
-		error = $6, response_snippet = $7, finished_at = now() WHERE id = $1`,
-		r.ID, r.Status, r.Attempts, r.StatusCode, r.DurationMS, r.Error, r.ResponseSnippet)
+// FinishRun stores a run's result and updates the job's last status. It
+// returns the job's previous status so callers can alert on a change (nil if
+// the job never ran, or was deleted mid-run).
+func (s *Store) FinishRun(ctx context.Context, r *JobRun) (prevStatus *string, err error) {
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = s.Pool.Exec(ctx, `UPDATE jobs SET last_run_at = now(), last_status = $2 WHERE id = $1`, r.JobID, r.Status)
-	return err
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `UPDATE job_runs SET status = $2, attempts = $3, status_code = $4, duration_ms = $5,
+		error = $6, response_snippet = $7, finished_at = now() WHERE id = $1`,
+		r.ID, r.Status, r.Attempts, r.StatusCode, r.DurationMS, r.Error, r.ResponseSnippet); err != nil {
+		return nil, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT last_status FROM jobs WHERE id = $1 FOR UPDATE`, r.JobID).Scan(&prevStatus); err != nil {
+		if notFound(err) == ErrNotFound {
+			return nil, tx.Commit(ctx) // job deleted while it was running
+		}
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE jobs SET last_run_at = now(), last_status = $2 WHERE id = $1`, r.JobID, r.Status); err != nil {
+		return nil, err
+	}
+	return prevStatus, tx.Commit(ctx)
 }
 
 func (s *Store) ListRuns(ctx context.Context, jobID string, limit int) ([]*JobRun, error) {

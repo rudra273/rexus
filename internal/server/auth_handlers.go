@@ -118,8 +118,9 @@ func nextStep(a *authCtx) string {
 	}
 }
 
-// startSession creates a session and sets the cookie. Returns the next step.
-func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) (string, error) {
+// startSession creates a session and sets the cookie. Returns the next step
+// and the new session's id.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) (string, string, error) {
 	token := crypto.RandomToken(32)
 	verified := !s.needsMFA(u)
 	ttl := sessionTTL
@@ -127,8 +128,9 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.U
 		ttl = partialTTL
 	}
 	expires := time.Now().Add(ttl)
-	if err := s.store.CreateSession(r.Context(), u.ID, crypto.HashToken(token), verified, clientIP(r), r.UserAgent(), expires); err != nil {
-		return "", err
+	sid, err := s.store.CreateSession(r.Context(), u.ID, crypto.HashToken(token), verified, clientIP(r), r.UserAgent(), expires)
+	if err != nil {
+		return "", "", err
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -140,12 +142,23 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.U
 	})
 	switch {
 	case verified:
-		return nextOK, nil
+		return nextOK, sid, nil
 	case u.TOTPEnabled:
-		return next2FAVerify, nil
+		return next2FAVerify, sid, nil
 	default:
-		return next2FAEnroll, nil
+		return next2FAEnroll, sid, nil
 	}
+}
+
+// loginAlert tells the team about a login from an IP/browser this user hasn't
+// used before (if that alert is switched on).
+func (s *Server) loginAlert(r *http.Request, u *store.User, sessionID string) {
+	ip := clientIP(r)
+	known, err := s.store.KnownDevice(r.Context(), u.ID, ip, r.UserAgent(), sessionID)
+	if err != nil || known {
+		return
+	}
+	s.alerts.NewDeviceLogin(u, ip, r.UserAgent())
 }
 
 func (s *Server) clearCookie(w http.ResponseWriter) {
@@ -267,7 +280,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		TargetType: "user", TargetID: u.ID, IP: ip, Details: map[string]any{"via": "ui"}})
 	s.log.Info("owner created via setup screen", "email", u.Email)
 
-	next, err := s.startSession(w, r, u)
+	next, _, err := s.startSession(w, r, u)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -316,7 +329,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.loginLimiter.Reset("ip:" + ip)
 	s.loginLimiter.Reset(emailKey)
 
-	next, err := s.startSession(w, r, u)
+	next, sid, err := s.startSession(w, r, u)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -324,6 +337,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if next == nextOK {
 		s.store.TouchLogin(r.Context(), u.ID)
 		s.store.Audit(r.Context(), store.AuditEntry{ActorUserID: &u.ID, Actor: u.Email, Action: "auth.login", IP: ip})
+		s.loginAlert(r, u, sid)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": u, "next": next})
 }
@@ -392,6 +406,7 @@ func (s *Server) handle2FAVerify(w http.ResponseWriter, r *http.Request, a *auth
 		return
 	}
 	s.audit(r, a, "auth.login", "", "", map[string]any{"2fa": true})
+	s.loginAlert(r, a.user, a.sess.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"user": a.user, "next": nextOK})
 }
 
@@ -465,6 +480,7 @@ func (s *Server) handle2FAEnable(w http.ResponseWriter, r *http.Request, a *auth
 	s.audit(r, a, "auth.2fa_enabled", "user", a.user.ID, nil)
 	if wasPartial {
 		s.audit(r, a, "auth.login", "", "", map[string]any{"2fa": true})
+		s.loginAlert(r, a.user, a.sess.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": a.user, "next": nextOK})
 }
@@ -512,5 +528,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a *authC
 		"base_url":     s.cfg.BaseURL,
 		"version":      s.version,
 		"toggles":      s.cfg.Toggles(),
+		"smtp":         map[string]any{"configured": s.alerts.SMTPConfigured(), "host": s.alerts.SMTPHost()},
 	})
 }

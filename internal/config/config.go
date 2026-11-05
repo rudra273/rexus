@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/netip"
 	"os"
 	"strconv"
@@ -31,6 +32,13 @@ type Config struct {
 	Port        int
 	DatabaseURL string
 	MasterKey   []byte // 32 bytes, never stored in DB
+
+	// Optional outgoing-mail relay (alerts by email, emailed invite links).
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
 
 	// Toggles (plan.md §3.1)
 	TwoFAMode       string
@@ -125,6 +133,28 @@ func Load() (*Config, []string, error) {
 	c.BackupEnabled = parseBool("REXUS_BACKUP_ENABLED", false, fail)
 	if c.BackupEnabled && c.BackupDir == "" {
 		fail("REXUS_BACKUP_DIR is required when REXUS_BACKUP_ENABLED=true")
+	}
+
+	// Optional SMTP relay. Port 465 = TLS from the start, anything else = STARTTLS.
+	c.SMTPHost = os.Getenv("REXUS_SMTP_HOST")
+	c.SMTPUser = os.Getenv("REXUS_SMTP_USER")
+	c.SMTPPassword = os.Getenv("REXUS_SMTP_PASSWORD")
+	c.SMTPFrom = strings.TrimSpace(os.Getenv("REXUS_SMTP_FROM"))
+	c.SMTPPort = 587
+	if c.SMTPHost = strings.TrimSpace(c.SMTPHost); c.SMTPHost != "" {
+		p, err := strconv.Atoi(getenv("REXUS_SMTP_PORT", "587"))
+		if err != nil || p < 1 || p > 65535 {
+			fail("REXUS_SMTP_PORT must be a port number (1-65535)")
+		}
+		c.SMTPPort = p
+		if c.SMTPFrom == "" {
+			fail("REXUS_SMTP_FROM is required when REXUS_SMTP_HOST is set (e.g. Rexus <rexus@yourcompany.com>)")
+		} else if _, err := mail.ParseAddress(c.SMTPFrom); err != nil {
+			fail("REXUS_SMTP_FROM is not a valid email address: %q", c.SMTPFrom)
+		}
+		if c.SMTPUser != "" && c.SMTPPassword == "" {
+			warnings = append(warnings, "REXUS_SMTP_USER is set but REXUS_SMTP_PASSWORD is empty")
+		}
 	}
 
 	c.ModuleScheduler = parseBool("REXUS_MODULE_SCHEDULER", true, fail)

@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 4** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management** (invites, four roles, password resets, audit log), and **health checks with a dashboard**. See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 5** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, and **alerts** (Telegram, Slack, Discord, email). See [plan.md](plan.md) for the full roadmap.
 
 ## Quick start (Docker)
 
@@ -83,6 +83,37 @@ The **Dashboard** lists everything that needs attention across all projects — 
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
+## Alerts
+
+Open **Alerts** (owner and admins) to choose where alerts go and what they are about.
+
+**Channels** — add as many as you like; every alert goes to every enabled channel. Each has a **Send test** button.
+
+| Channel | What you need |
+|---|---|
+| **Telegram** | A bot token from @BotFather, and the chat ID of the group (a negative number) or `@yourchannel`. Add the bot to the group first. |
+| **Slack** | An Incoming Webhook URL (api.slack.com/apps → Incoming Webhooks). |
+| **Discord** | A webhook URL (Channel settings → Integrations → Webhooks). |
+| **Email** | One or more addresses. Needs an SMTP relay on the server (below). |
+
+Tokens and webhook URLs are stored encrypted and are never shown again. Webhooks are only accepted for the real Slack and Discord addresses. Alert text can't ping anyone (`@everyone` and similar are neutralised).
+
+**Events** — switch each on or off. Every alert names the project and links back to the right page in Rexus.
+
+| Event | Default | Sent when |
+|---|:-:|---|
+| Site is down | on | A check fails as many times in a row as its "down after" setting. |
+| Site recovered | on | A down check is up again (with how long it was down). |
+| Site is slow | off | A check responds, but slower than its limit. |
+| SSL certificate expiring | on | A certificate enters its warning window, then again at 7 and 1 days. |
+| Secret / API key expiring | on | At 30, 7 and 1 days before the expiry date (you choose the days), and once when it has expired. |
+| Cron job failed | on | A job starts failing (one alert, not one per failed run). |
+| New login from a new device | off | Someone logs in from an IP address or browser they haven't used before. |
+
+**No spam.** Down, recovered and job alerts fire once, when the state changes. Expiry reminders go to each channel once per threshold (a key you re-date reminds again). A channel that keeps failing is given up on after 3 tries; the failure shows under **Recent alerts**.
+
+**Email (SMTP).** Set these in `.env` and restart: `REXUS_SMTP_HOST`, `REXUS_SMTP_PORT` (default 587), `REXUS_SMTP_USER`, `REXUS_SMTP_PASSWORD`, `REXUS_SMTP_FROM`. Any relay works — Resend, Amazon SES, Gmail SMTP, Mailgun, or your own server. Port 465 uses TLS from the start; other ports use STARTTLS. Rexus refuses to send the password over an unencrypted connection. Once email is set up, invite and password-reset links are emailed too.
+
 ## Team and permissions
 
 Rexus is invite-only; there is no public signup. The owner and admins add people from **Users → Invite user**: pick an email and a role, and Rexus shows a one-time link to send them. They open it, choose their own name and password, and set up 2FA. Admins never see anyone's password.
@@ -96,7 +127,7 @@ Rexus is invite-only; there is no public signup. The owner and admins add people
 
 - Role changes and disabling take effect on the very next request; disabling logs the person out immediately.
 - A **password-reset link** is one-time and expires in 24 hours; using it logs the user out everywhere. **Reset 2FA** forces them to enrol again at next login.
-- Invite links expire after 7 days and only work once. Only a hash of each link is stored, so a link can't be shown again — use **New link** to replace it. Rexus doesn't send email yet (that arrives with alerts), so you share the link yourself.
+- Invite links expire after 7 days and only work once. Only a hash of each link is stored, so a link can't be shown again — use **New link** to replace it. If email is set up (see **Alerts**) the link is also emailed to them; otherwise you share it yourself.
 - Everyone can change their own password and **log out of all devices** from **Settings**.
 - The **Audit log** (owner and admins) records logins, secret reveals and copies, and every change — secret values are never written to it.
 

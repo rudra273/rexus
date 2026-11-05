@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"rexus/internal/alerts"
 	"rexus/internal/crypto"
 	"rexus/internal/store"
 )
@@ -33,6 +34,7 @@ type Engine struct {
 	store    *store.Store
 	keys     *crypto.Keyring
 	log      *slog.Logger
+	alerts   *alerts.Service
 	userJobs bool // REXUS_MODULE_SCHEDULER
 
 	client *http.Client
@@ -40,11 +42,12 @@ type Engine struct {
 	wg     sync.WaitGroup
 }
 
-func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, userJobs bool) *Engine {
+func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, userJobs bool, al *alerts.Service) *Engine {
 	return &Engine{
 		store:    st,
 		keys:     keys,
 		log:      log,
+		alerts:   al,
 		userJobs: userJobs,
 		client:   &http.Client{}, // per-request timeout comes from the job's context
 		sem:      make(chan struct{}, maxConcurrent),
@@ -199,8 +202,14 @@ func (e *Engine) execute(ctx context.Context, j *store.Job, runID string) {
 		run.Status = "success"
 		e.log.Debug("job succeeded", "job", j.Name, "id", j.ID, "status", code, "ms", dur)
 	}
-	if err := e.store.FinishRun(context.Background(), run); err != nil {
-		e.log.Error("scheduler: finish run", "run", runID, "err", err)
+	prev, ferr := e.store.FinishRun(context.Background(), run)
+	if ferr != nil {
+		e.log.Error("scheduler: finish run", "run", runID, "err", ferr)
+		return
+	}
+	// One alert when a job starts failing — not on every failed run after that.
+	if run.Status == "failed" && (prev == nil || *prev != "failed") {
+		e.alerts.JobFailed(j, run)
 	}
 }
 

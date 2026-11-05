@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/term"
 
+	"rexus/internal/alerts"
 	"rexus/internal/auth"
 	"rexus/internal/config"
 	"rexus/internal/crypto"
@@ -146,14 +147,18 @@ func cmdServe() error {
 		}
 	}
 
-	engine := scheduler.New(st, keys, log, cfg.ModuleScheduler)
-	srv := server.New(cfg, st, keys, engine, log, version)
+	al := alerts.New(st, keys, log, cfg.BaseURL, cfg.CompanyName, alerts.SMTPConfig{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
+	})
+	engine := scheduler.New(st, keys, log, cfg.ModuleScheduler, al)
+	srv := server.New(cfg, st, keys, engine, al, log, version)
 	if err := srv.InitSetup(ctx); err != nil {
 		return err
 	}
 
 	engineCtx, stopEngine := context.WithCancel(context.Background())
 	engine.Start(engineCtx)
+	al.Start(engineCtx)
 
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -184,6 +189,7 @@ func cmdServe() error {
 	httpSrv.Shutdown(shutdownCtx)
 	stopEngine()
 	engine.Wait(30 * time.Second)
+	al.Wait(20 * time.Second)
 	return nil
 }
 

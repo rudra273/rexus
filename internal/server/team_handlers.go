@@ -200,7 +200,17 @@ func (s *Server) handleResetPasswordLink(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	s.audit(r, a, "user.reset_link", "user", u.ID, map[string]any{"email": u.Email})
-	writeJSON(w, http.StatusCreated, map[string]any{"link": s.cfg.BaseURL + "/reset/" + token, "expires_at": expires})
+	link := s.cfg.BaseURL + "/reset/" + token
+	resp := map[string]any{"link": link, "expires_at": expires, "emailed": false}
+	if s.alerts.SMTPConfigured() {
+		if err := s.alerts.SendPasswordReset(r.Context(), u.Email, link, a.user.Name); err != nil {
+			s.log.Warn("reset email failed", "to", u.Email, "err", err)
+			resp["email_error"] = err.Error()
+		} else {
+			resp["emailed"] = true
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *Server) handleReset2FA(w http.ResponseWriter, r *http.Request, a *authCtx) {
@@ -269,7 +279,17 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 	}
 	s.audit(r, a, "user.invite", "invite", inv.ID, map[string]any{"email": inv.Email, "role": inv.Role})
 	// The link is shown once — only its hash is stored. Re-invite for a new one.
-	writeJSON(w, http.StatusCreated, map[string]any{"invite": inv, "link": s.cfg.BaseURL + "/invite/" + token})
+	link := s.cfg.BaseURL + "/invite/" + token
+	resp := map[string]any{"invite": inv, "link": link, "emailed": false}
+	if s.alerts.SMTPConfigured() {
+		if err := s.alerts.SendInvite(r.Context(), inv.Email, link, inv.Role, a.user.Name); err != nil {
+			s.log.Warn("invite email failed", "to", inv.Email, "err", err)
+			resp["email_error"] = err.Error()
+		} else {
+			resp["emailed"] = true
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request, a *authCtx) {
@@ -360,7 +380,7 @@ func (s *Server) handleJoinAccept(w http.ResponseWriter, r *http.Request) {
 	s.store.Audit(r.Context(), store.AuditEntry{ActorUserID: &u.ID, Actor: u.Email, Action: "user.invite_accept",
 		TargetType: "user", TargetID: u.ID, IP: ip, Details: map[string]any{"role": u.Role}})
 
-	next, err := s.startSession(w, r, u)
+	next, _, err := s.startSession(w, r, u)
 	if err != nil {
 		s.internalError(w, r, err)
 		return

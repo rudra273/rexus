@@ -14,6 +14,13 @@ function canManageUser(actor: User, target: User) {
 
 // ───────────────────────── users page ─────────────────────────
 
+/** Extra sentence for a link dialog, depending on whether the server emailed the link. */
+function emailNote(r: { emailed?: boolean; email_error?: string }, to: string): string {
+  if (r.emailed) return ` We also emailed it to ${to}.`
+  if (r.email_error) return ` Emailing it failed (${r.email_error}) — send the link yourself.`
+  return ''
+}
+
 interface LinkInfo {
   title: string
   link: string
@@ -75,18 +82,18 @@ export function UsersPage() {
   }
   const resetLink = (u: User) =>
     act(async () => {
-      const r = await api<{ link: string }>(`/api/users/${u.id}/reset-password`, { method: 'POST' })
+      const r = await api<{ link: string; emailed?: boolean; email_error?: string }>(`/api/users/${u.id}/reset-password`, { method: 'POST' })
       setLinkInfo({
         title: `Password reset link for ${u.email}`,
         link: r.link,
-        note: 'Send this link to the user. It works once and expires in 24 hours. They choose their own password — you never see it.',
+        note: 'Send this link to the user. It works once and expires in 24 hours. They choose their own password — you never see it.' + emailNote(r, u.email),
       })
     })
   const revoke = (i: Invite) => act(() => api(`/api/invites/${i.id}`, { method: 'DELETE' }))
   const newLink = (i: Invite) =>
     act(async () => {
-      const r = await api<{ link: string }>('/api/invites', { method: 'POST', body: { email: i.email, role: i.role } })
-      setLinkInfo({ title: `New invite link for ${i.email}`, link: r.link, note: 'The previous link no longer works. This one expires in 7 days.' })
+      const r = await api<{ link: string; emailed?: boolean; email_error?: string }>('/api/invites', { method: 'POST', body: { email: i.email, role: i.role } })
+      setLinkInfo({ title: `New invite link for ${i.email}`, link: r.link, note: 'The previous link no longer works. This one expires in 7 days.' + emailNote(r, i.email) })
     })
 
   const link = 'text-xs text-zinc-400 hover:text-zinc-100'
@@ -189,9 +196,9 @@ export function UsersPage() {
         <InviteModal
           roles={roles}
           onClose={() => setInviting(false)}
-          onCreated={(email, l) => {
+          onCreated={(email, l, extra) => {
             setInviting(false)
-            setLinkInfo({ title: `Invite link for ${email}`, link: l, note: 'Send this link to them (chat, email…). It works once and expires in 7 days. It is shown only now.' })
+            setLinkInfo({ title: `Invite link for ${email}`, link: l, note: 'Send this link to them (chat, email…). It works once and expires in 7 days. It is shown only now.' + extra })
             load()
           }}
         />
@@ -201,7 +208,7 @@ export function UsersPage() {
   )
 }
 
-function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: () => void; onCreated: (email: string, link: string) => void }) {
+function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: () => void; onCreated: (email: string, link: string, extra: string) => void }) {
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<string>(roles.includes('contributor') ? 'contributor' : (roles[0] ?? ''))
   const [error, setError] = useState<string | null>(null)
@@ -212,8 +219,8 @@ function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: ()
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ link: string }>('/api/invites', { method: 'POST', body: { email, role } })
-      onCreated(email, r.link)
+      const r = await api<{ link: string; emailed?: boolean; email_error?: string }>('/api/invites', { method: 'POST', body: { email, role } })
+      onCreated(email, r.link, emailNote(r, email))
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -238,7 +245,7 @@ function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: ()
             {roles.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
-        <p className="text-xs text-zinc-500">They'll set their own password and two-factor authentication from the link. No email is sent — you share the link yourself.</p>
+        <p className="text-xs text-zinc-500">They'll set their own password and two-factor authentication from the link. If email is set up on the server it is emailed to them too; otherwise you share the link yourself.</p>
         <ErrorBox error={error} />
         <div className="flex gap-2">
           <Button type="submit" disabled={busy || !role}>{busy ? 'Creating…' : 'Create invite link'}</Button>

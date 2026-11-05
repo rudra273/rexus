@@ -142,3 +142,20 @@ func TestMessages(t *testing.T) {
 		t.Fatalf("unexpected message %q", same.Message)
 	}
 }
+
+func TestDegradedReasonIsRecorded(t *testing.T) {
+	slow := Evaluate(Current{Status: "up", DownThreshold: 3, RecoveryThreshold: 1, MaxResponseMS: ip(100)}, okOutcome(900), now)
+	if slow.Status != "degraded" || slow.Reason != "slow" {
+		t.Fatalf("got %+v", slow)
+	}
+	soon := now.Add(3 * 24 * time.Hour)
+	o := okOutcome(10)
+	o.SSLExpiresAt = &soon
+	ssl := Evaluate(Current{Status: "up", DownThreshold: 3, RecoveryThreshold: 1, SSLWarnDays: ip(14)}, o, now)
+	if ssl.Status != "degraded" || ssl.Reason != "ssl" {
+		t.Fatalf("got %+v", ssl)
+	}
+	if ok := Evaluate(Current{Status: "up", DownThreshold: 3, RecoveryThreshold: 1}, okOutcome(10), now); ok.Reason != "" {
+		t.Fatalf("healthy check has no reason, got %q", ok.Reason)
+	}
+}

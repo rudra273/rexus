@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–4 built** — next is Phase 5 (Alerts). See §13.
+Status: **Phases 1–5 built** — next is Phase 6 (Backups). See §13.
 
 ---
 
@@ -482,7 +482,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** one screen shows the health of every project.
 
-### Phase 5 — Alerts
+### Phase 5 — Alerts ✅ built
+> Built Nov 2026. Notes: channels are Telegram, Slack, Discord and email (SMTP relay via `REXUS_SMTP_*`); bot tokens and webhook URLs are stored encrypted and never returned; webhooks are accepted only for the real Slack/Discord hosts; events are switched per type in the UI (defaults as in §8.1); down/recovered/job alerts fire once on the state change, expiry reminders once per channel per threshold (hourly check, de-duplicated in `alerts_sent`); "new login from a new device" added; invite and password-reset links are emailed when SMTP is configured. The `backup.failed` event arrives with backups in Phase 6.
 - Global channels: Telegram, Discord, Slack, email (SMTP relay).
 - Configurable events (§8.1), messages with project info + link, no duplicate spam, test button.
 - Secret expiry reminders, SSL expiry, job failed, site down/recovered.

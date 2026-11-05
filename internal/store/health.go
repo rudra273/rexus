@@ -206,29 +206,41 @@ type HealthTransition struct {
 	Status    string
 	Failures  int
 	Successes int
-	Message   string // explains a status change (shown in events, used by alerts later)
+	Message   string // explains a status change (shown in events and alerts)
+	Reason    string // why a check is degraded: "slow" or "ssl"
+}
+
+// HealthChange describes a status change that RecordHealth just stored.
+type HealthChange struct {
+	From, To string
+	Message  string
+	Reason   string
+	// Since is when the previous status began (e.g. when a down check went down).
+	Since *time.Time
+	// Check is the check as it was before this probe.
+	Check *HealthCheck
 }
 
 // RecordHealth stores a probe result and updates the check's status. The
 // check row is locked while eval runs, so overlapping probes (scheduled +
-// "run now") can't corrupt the failure counters. It returns the status
-// before and after.
-func (s *Store) RecordHealth(ctx context.Context, checkID string, r HealthResult, eval func(*HealthCheck) HealthTransition) (from, to string, err error) {
+// "run now") can't corrupt the failure counters. It returns what changed, or
+// nil if the status stayed the same.
+func (s *Store) RecordHealth(ctx context.Context, checkID string, r HealthResult, eval func(*HealthCheck) HealthTransition) (*HealthChange, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
 	c, err := scanHealth(tx.QueryRow(ctx, healthSelect+` WHERE c.id = $1 FOR UPDATE OF c`, checkID))
 	if err != nil {
-		return "", "", err // ErrNotFound if the check was deleted mid-probe
+		return nil, err // ErrNotFound if the check was deleted mid-probe
 	}
 	t := eval(c)
 
 	if _, err := tx.Exec(ctx, `INSERT INTO health_results (check_id, ok, status_code, response_ms, error)
 		VALUES ($1, $2, $3, $4, $5)`, checkID, r.OK, r.StatusCode, r.ResponseMS, r.Error); err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE health_checks SET status = $2, consecutive_failures = $3, consecutive_successes = $4,
 			status_since = CASE WHEN status <> $2 OR status_since IS NULL THEN now() ELSE status_since END,
@@ -236,16 +248,20 @@ func (s *Store) RecordHealth(ctx context.Context, checkID string, r HealthResult
 			ssl_expires_at = COALESCE($8, ssl_expires_at)
 		WHERE id = $1`,
 		checkID, t.Status, t.Failures, t.Successes, r.ResponseMS, r.StatusCode, r.Error, r.SSLExpiresAt); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	// The very first up/unknown → up isn't an incident; everything else is.
-	if t.Status != c.Status && !(c.Status == StatusUnknown && t.Status == StatusUp) {
-		if _, err := tx.Exec(ctx, `INSERT INTO health_events (check_id, from_status, to_status, message)
-			VALUES ($1, $2, $3, $4)`, checkID, c.Status, t.Status, t.Message); err != nil {
-			return "", "", err
+	var change *HealthChange
+	if t.Status != c.Status {
+		change = &HealthChange{From: c.Status, To: t.Status, Message: t.Message, Reason: t.Reason, Since: c.StatusSince, Check: c}
+		// The very first unknown → up isn't an incident; everything else is.
+		if !(c.Status == StatusUnknown && t.Status == StatusUp) {
+			if _, err := tx.Exec(ctx, `INSERT INTO health_events (check_id, from_status, to_status, message, reason)
+				VALUES ($1, $2, $3, $4, $5)`, checkID, c.Status, t.Status, t.Message, t.Reason); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return c.Status, t.Status, tx.Commit(ctx)
+	return change, tx.Commit(ctx)
 }
 
 // ---- events, series, uptime, pruning ----

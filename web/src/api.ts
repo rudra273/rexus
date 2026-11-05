@@ -198,6 +198,38 @@ export interface SecretVersion {
   current: boolean
 }
 
+export type ChannelType = 'telegram' | 'discord' | 'slack' | 'email'
+
+export interface AlertChannel {
+  id: string
+  type: ChannelType
+  name: string
+  enabled: boolean
+  summary: string
+  created_at: string
+}
+
+export interface AlertEventState {
+  key: string
+  label: string
+  description: string
+  default_enabled: boolean
+  has_days: boolean
+  enabled: boolean
+  days?: number[]
+}
+
+export interface AlertRecord {
+  id: number
+  at: string
+  event: string
+  channel_name: string
+  project_key: string | null
+  title: string
+  status: 'sent' | 'failed'
+  error: string | null
+}
+
 export interface Invite {
   id: string
   email: string

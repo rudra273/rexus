@@ -71,9 +71,11 @@ func Evaluate(c Current, o Outcome, now time.Time) store.HealthTransition {
 	switch {
 	case c.MaxResponseMS != nil && o.ResponseMS > *c.MaxResponseMS:
 		reason = fmt.Sprintf("slow response: %d ms (limit %d ms)", o.ResponseMS, *c.MaxResponseMS)
+		t.Reason = "slow"
 	case c.SSLWarnDays != nil && o.SSLExpiresAt != nil && o.SSLExpiresAt.Sub(now) < time.Duration(*c.SSLWarnDays)*24*time.Hour:
 		days := int(o.SSLExpiresAt.Sub(now).Hours() / 24)
 		reason = fmt.Sprintf("SSL certificate expires in %d day%s", days, plural(days))
+		t.Reason = "ssl"
 	}
 	if reason != "" {
 		t.Status = store.StatusDegraded
@@ -142,7 +144,7 @@ func (e *Engine) runCheck(ctx context.Context, c *store.HealthCheck) {
 		res.Error = &o.Err
 	}
 
-	from, to, err := e.store.RecordHealth(ctx, c.ID, res, func(cur *store.HealthCheck) store.HealthTransition {
+	change, err := e.store.RecordHealth(ctx, c.ID, res, func(cur *store.HealthCheck) store.HealthTransition {
 		// Use the freshly locked row's settings, not the copy claimed earlier.
 		return Evaluate(Current{
 			Status:            cur.Status,
@@ -161,8 +163,9 @@ func (e *Engine) runCheck(ctx context.Context, c *store.HealthCheck) {
 		e.log.Error("health: record result", "check", c.ID, "err", err)
 		return
 	}
-	if from != to {
-		e.log.Info("health status changed", "check", c.Name, "project", c.ProjectKey, "from", from, "to", to)
+	if change != nil {
+		e.log.Info("health status changed", "check", c.Name, "project", c.ProjectKey, "from", change.From, "to", change.To)
+		e.alerts.CheckChanged(change)
 	}
 }
 

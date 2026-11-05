@@ -13,13 +13,14 @@ type Session struct {
 	LastSeenAt  time.Time
 }
 
-func (s *Store) CreateSession(ctx context.Context, userID string, tokenHash []byte, mfaVerified bool, ip, ua string, expires time.Time) error {
+func (s *Store) CreateSession(ctx context.Context, userID string, tokenHash []byte, mfaVerified bool, ip, ua string, expires time.Time) (string, error) {
 	if len(ua) > 300 {
 		ua = ua[:300]
 	}
-	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, mfa_verified, ip, user_agent, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`, userID, tokenHash, mfaVerified, ip, ua, expires)
-	return err
+	var id string
+	err := s.Pool.QueryRow(ctx, `INSERT INTO sessions (user_id, token_hash, mfa_verified, ip, user_agent, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, userID, tokenHash, mfaVerified, ip, ua, expires).Scan(&id)
+	return id, err
 }
 
 // SessionByToken returns a live (not revoked, not expired) session and its user.

@@ -9,6 +9,7 @@ interface InstanceSettings {
   base_url: string
   version: string
   toggles: Record<string, string>
+  smtp?: { configured: boolean; host: string }
 }
 
 export function SettingsPage() {
@@ -94,6 +95,10 @@ export function SettingsPage() {
             <Row label="Company" value={instance.company_name} />
             <Row label="Base URL" value={<span className="mono">{instance.base_url}</span>} />
             <Row label="Version" value={<span className="mono">{instance.version}</span>} />
+            <Row
+              label="Email (SMTP)"
+              value={instance.smtp?.configured ? <span className="mono">{instance.smtp.host}</span> : <span className="text-zinc-500">not set up</span>}
+            />
             {Object.entries(instance.toggles)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([k, v]) => (

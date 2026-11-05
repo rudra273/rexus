@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"rexus/internal/alerts"
 	"rexus/internal/auth"
 	"rexus/internal/config"
 	"rexus/internal/crypto"
@@ -31,6 +32,7 @@ type Server struct {
 	store   *store.Store
 	keys    *crypto.Keyring
 	engine  *scheduler.Engine
+	alerts  *alerts.Service
 	log     *slog.Logger
 	version string
 
@@ -43,12 +45,13 @@ type Server struct {
 	linkLimiter  *auth.Limiter // bad invite/reset tokens, per IP
 }
 
-func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, log *slog.Logger, version string) *Server {
+func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, log *slog.Logger, version string) *Server {
 	return &Server{
 		cfg:          cfg,
 		store:        st,
 		keys:         keys,
 		engine:       engine,
+		alerts:       al,
 		log:          log,
 		version:      version,
 		loginLimiter: auth.NewLimiter(5, 15*time.Minute),
@@ -138,6 +141,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/invites/{id}", s.authed(s.handleRevokeInvite))
 	mux.HandleFunc("POST /api/owner/transfer", s.authed(s.handleTransferOwnership))
 	mux.HandleFunc("GET /api/audit", s.authed(s.handleAudit))
+
+	// Alerts (owner / admin)
+	mux.HandleFunc("GET /api/alerts/channels", s.authed(s.handleListChannels))
+	mux.HandleFunc("POST /api/alerts/channels", s.authed(s.handleCreateChannel))
+	mux.HandleFunc("PUT /api/alerts/channels/{id}", s.authed(s.handleUpdateChannel))
+	mux.HandleFunc("DELETE /api/alerts/channels/{id}", s.authed(s.handleDeleteChannel))
+	mux.HandleFunc("POST /api/alerts/channels/{id}/test", s.authed(s.handleTestChannel))
+	mux.HandleFunc("GET /api/alerts/events", s.authed(s.handleListAlertEvents))
+	mux.HandleFunc("PUT /api/alerts/events/{key}", s.authed(s.handleUpdateAlertEvent))
+	mux.HandleFunc("GET /api/alerts/history", s.authed(s.handleAlertHistory))
 
 	mux.HandleFunc("GET /api/projects", s.authed(s.handleListProjects))
 	mux.HandleFunc("POST /api/projects", s.authed(s.handleCreateProject))

@@ -6,6 +6,7 @@ import { CheckDetailPage, CheckFormPage } from './pages/health'
 import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
+import { AlertsPage } from './pages/alerts'
 import { AcceptInvitePage, AuditPage, ResetPasswordPage, UsersPage } from './pages/team'
 import { VaultPage } from './pages/vault'
 import { cx, Spinner } from './ui'
@@ -67,6 +68,7 @@ export default function App() {
         {meta.modules.vault && <Route path="/vault" element={<VaultPage />} />}
         {isAdmin(user.role) && (
           <>
+            <Route path="/alerts" element={<AlertsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/audit" element={<AuditPage />} />
           </>
@@ -86,6 +88,7 @@ function Layout() {
     ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', end: false }] : []),
     ...(user && isAdmin(user.role)
       ? [
+          { to: '/alerts', label: 'Alerts', end: false },
           { to: '/users', label: 'Users', end: false },
           { to: '/audit', label: 'Audit log', end: false },
         ]
