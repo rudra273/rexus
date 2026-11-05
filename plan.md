@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–7 + services built.** Next: Phase 8 (Cloudflare Tunnel) and Phase 9 (deploy tokens — apps load their env from Rexus at startup); see §13.
+Status: **Phases 1–7 + services built.** Next: Phase 8 (Cloudflare Tunnel), Phase 9 (deploy tokens — apps load their env from Rexus at startup), Phase 10 (project access per user); see §13.
 
 ---
 
@@ -165,7 +165,7 @@ rexus owner transfer --to other@company.com    # hand over ownership
 
 ## 5. Roles & permissions (decided — kept simple)
 
-**4 fixed roles, global.** One role per user; the role applies to all projects. No custom roles, no per-project permissions (for now).
+**4 fixed roles, global.** One role per user. No custom roles. Which projects a user can see is set separately — see Phase 10 (§13).
 
 | Action | Owner | Admin | Contributor | Viewer |
 |---|:-:|:-:|:-:|:-:|
@@ -190,7 +190,7 @@ rexus owner transfer --to other@company.com    # hand over ownership
 - Every **secret reveal and copy** is audit-logged, no matter who does it.
 - Permission checks happen on the **server** for every API call — the UI only hides buttons.
 
-**Later (only if needed):** per-project access (e.g. Contributor on Project A only).
+**Planned:** project access per user — Phase 10 (§13).
 
 ---
 
@@ -440,7 +440,7 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 **Built:** Phases 1–7 (foundation + keepalive jobs, Vault, team, health checks + dashboard, alerts, backups, read-only API) and optional **services** per project. How they work is in the README and in §1–12 above; the detailed build notes are in git history.
 
-**Next:** Phase 8 (Cloudflare Tunnel) → Phase 9 (deploy tokens: apps load their env from Rexus at startup). Phase 10 (Rexus pushes secrets into deployments) is future.
+**Next:** Phase 8 (Cloudflare Tunnel) → Phase 9 (deploy tokens: apps load their env from Rexus at startup) → Phase 10 (project access per user). Phase 11 (Rexus pushes secrets into deployments) is future.
 
 ### Phase 8 — Public HTTPS address with Cloudflare Tunnel
 
@@ -516,7 +516,61 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 
 **Done when:** a project on a cloud platform starts with only `REXUS_URL` + `REXUS_TOKEN` set, and after changing a secret in the Vault and restarting, the app uses the new value.
 
-### Phase 10 — Rexus updates secrets in deployments (future)
+### Phase 10 — Project access per user
+
+**Goal:** each user sees only the projects shared with them. The owner always sees everything.
+
+**Who sees what**
+
+| Role | Projects they see | Can create projects? |
+|---|---|---|
+| **Owner** | **All**, always — including every project an admin creates | ✅ |
+| **Admin** | **All projects** *or* **selected projects**, set by the owner. Never projects marked **Owner only**. Always sees projects they created. | ✅ |
+| **Contributor** | Only projects shared with them | ❌ (change from today) |
+| **Viewer** | Only projects shared with them | ❌ |
+
+- Roles stay **global** (one role per user). Access is just *which projects* a user can see; what they can do inside a project still comes from their role (§5). No per-project roles.
+- **Owner only:** the owner can mark a project *Owner only*. It's hidden from every admin, even "all projects" admins, until the owner turns it off or shares it with a specific person.
+- **Who can share:** the owner shares any project with anyone. An admin can share only projects they can see, and only with contributors/viewers. When an admin edits a user, grants to projects the admin can't see are kept and stay hidden from that admin.
+- **New projects:** created by owner → visible to "all projects" admins (unless marked Owner only). Created by an admin → visible to the owner, that admin, and "all projects" admins; contributors/viewers only once shared.
+- **Inside a project:** contributors work on secrets, jobs, checks and deploy tokens, but can't edit project settings (key, name, environments, services) or delete the project — owner/admin only.
+
+**UI**
+- **Team page → user:** an "Access" section — *All projects* (admins only) or a checklist of projects.
+- **Invite:** pick the projects at invite time.
+- **Project page → "Access" tab** (owner/admin): who can see this project, add/remove people, and the *Owner only* switch (owner only).
+
+**Data**
+- `project_access (user_id, project_id, granted_by, created_at)`, unique (user_id, project_id), cascades on delete.
+- `users.all_projects boolean` (admins only; ignored for owner, rejected for contributor/viewer).
+- `projects.owner_only boolean`, `projects.created_by` (already exists).
+
+**Enforced everywhere, on the server** — one helper (`visibleProjects(user)`) used by every query, never just hidden in the UI:
+- Project lists, dashboard, "Needs attention", search, the Vault page, expiring-secrets lists, jobs, checks, run history.
+- Direct URLs to a hidden project return **404** (not 403), so its existence doesn't leak.
+- **Audit log:** an admin sees only entries about projects they can see (plus team/user entries).
+- **API tokens:** a token can't see more than its creator could at creation time — tokens get the same access list (all / selected projects). Deploy tokens (Phase 9) are already one-project; creating one needs access to that project.
+- **Alerts:** channels are global and set by owner/admin, so alerts for an Owner only project still go to the team channels. Option: per-project "don't send alerts to shared channels" — decide when building.
+- **Backups** contain every project (secrets still encrypted). With Owner only projects in use, consider making backups owner-only.
+
+**Migration (nothing breaks on upgrade)**
+- Existing admins → *All projects*.
+- Existing contributors/viewers → access to **all existing projects**; the owner then trims.
+- Existing API tokens → *All projects* (owner can narrow or recreate them).
+
+**Tests**
+- Contributor/viewer sees only shared projects across every list, page, search and `/api/v1`; hidden project URLs return 404.
+- Contributor can't create, rename or delete a project.
+- Admin can't see Owner only projects, can't share projects they can't see, and editing a user keeps hidden grants.
+- Owner sees projects created by admins.
+- Removing access takes effect on the next request (no stale sessions).
+- Backup → restore keeps access lists.
+
+**Done when:** the owner can invite a contributor with access to one project, and that contributor sees only that project everywhere — UI and API.
+
+**Order:** after Phase 9. Phase 9's "who can create deploy tokens" check gains the project-access check here.
+
+### Phase 11 — Rexus updates secrets in deployments (future)
 
 When a secret changes in the Vault, Rexus pushes it into the deployment's platform env vars (e.g. Vercel, Render, Railway, GitHub Actions secrets) and optionally triggers a redeploy. Platform API keys stored encrypted in the Vault. Not designed yet — decide platforms first.
 
@@ -524,6 +578,5 @@ When a secret changes in the Vault, Rexus pushes it into the deployment's platfo
 - Mail system (§8).
 - Cloud backup targets (S3 / R2 / Backblaze / Drive).
 - Vault seal/unseal mode.
-- Per-project access for users.
 - Explicit secret sharing between services; job credentials bound to vault secrets; per-service alert routing; cross-project moves.
 - MIT license + public open-source release.
