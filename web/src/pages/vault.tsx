@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api, canWrite, type Environment, type Project, type Secret, type SecretVersion, type Service, type ServiceFilter } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
-import { ServiceBadge, ServiceSelect, serviceQuery } from './services'
+import { ServiceBadge, ServiceSelect, serviceQuery, useServices } from './services'
 
 export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'days_left'> }) {
   if (!secret.expires_on || secret.days_left == null) return <span className="text-xs text-zinc-600">no expiry</span>
@@ -181,7 +181,7 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
   )
 }
 
-function SecretRow({ secret, services, showService, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
+export function SecretRow({ secret, services, showService, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
   const [moving, setMoving] = useState(false)
   const [value, setValue] = useState<{ text: string; label: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -398,7 +398,7 @@ function MoveSecret({ secret, services, onClose, onMoved }: { secret: Secret; se
   )
 }
 
-function SecretForm({ environmentId, services, defaultService, existing, onClose, onSaved }: { environmentId: string; services: Service[]; defaultService: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
+export function SecretForm({ environmentId, services, defaultService, existing, onClose, onSaved }: { environmentId: string; services: Service[]; defaultService: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
   const [serviceId, setServiceId] = useState(existing?.service_id ?? defaultService)
   const [name, setName] = useState(existing?.name ?? '')
   const [value, setValue] = useState('')
@@ -512,7 +512,217 @@ function SecretForm({ environmentId, services, defaultService, existing, onClose
   )
 }
 
-// ───────────────────────── global vault page: search across projects ─────────────────────────
+// ───────────────────────── global vault page: folder tree + list + detail ─────────────────────────
+
+type Sel =
+  | { kind: 'all' }
+  | { kind: 'expiring' }
+  | { kind: 'recent' }
+  | { kind: 'project'; project: string }
+  | { kind: 'service'; project: string; service: string } // service '' = project-level secrets
+
+interface ProjectNode {
+  key: string
+  name: string
+  secrets: Secret[]
+  services: Map<string, { id: string; name: string; secrets: Secret[] }>
+}
+
+const PROJECT_LEVEL = ''
+
+function buildTree(secrets: Secret[]): ProjectNode[] {
+  const m = new Map<string, ProjectNode>()
+  for (const s of secrets) {
+    let p = m.get(s.project_key)
+    if (!p) m.set(s.project_key, (p = { key: s.project_key, name: s.project_name, secrets: [], services: new Map() }))
+    p.secrets.push(s)
+    const sk = s.service_key ?? PROJECT_LEVEL
+    let sv = p.services.get(sk)
+    if (!sv) p.services.set(sk, (sv = { id: s.service_id ?? '', name: s.service_name ?? 'Project-level', secrets: [] }))
+    sv.secrets.push(s)
+  }
+  return [...m.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function matches(sel: Sel, s: Secret): boolean {
+  switch (sel.kind) {
+    case 'all':
+    case 'recent':
+      return true
+    case 'expiring':
+      return s.days_left != null && s.days_left <= 30
+    case 'project':
+      return s.project_key === sel.project
+    case 'service':
+      return s.project_key === sel.project && (s.service_key ?? PROJECT_LEVEL) === sel.service
+  }
+}
+
+/** Row accent by urgency: red = expired or ≤7d, amber = ≤30d. */
+function expiryAccent(s: Pick<Secret, 'days_left'>): string {
+  if (s.days_left == null) return 'border-l-transparent'
+  if (s.days_left <= 7) return 'border-l-red-500'
+  if (s.days_left <= 30) return 'border-l-amber-400'
+  return 'border-l-transparent'
+}
+
+function worstExpiry(list: Secret[]): 'red' | 'amber' | null {
+  let w: 'red' | 'amber' | null = null
+  for (const s of list) {
+    if (s.days_left == null) continue
+    if (s.days_left <= 7) return 'red'
+    if (s.days_left <= 30) w = 'amber'
+  }
+  return w
+}
+
+function ExpiryDot({ list }: { list: Secret[] }) {
+  const w = worstExpiry(list)
+  if (!w) return null
+  return <span title={w === 'red' ? 'Has expired or soon-to-expire secrets' : 'Has secrets expiring within 30 days'} className={cx('ml-1.5 inline-block h-1.5 w-1.5 rounded-full', w === 'red' ? 'bg-red-500' : 'bg-amber-400')} />
+}
+
+function selTitle(sel: Sel, tree: ProjectNode[]): string[] {
+  if (sel.kind === 'all') return ['All secrets']
+  if (sel.kind === 'expiring') return ['Expiring soon']
+  if (sel.kind === 'recent') return ['Recently changed']
+  const p = tree.find((x) => x.key === sel.project)
+  if (sel.kind === 'project') return [p?.name ?? sel.project]
+  return [p?.name ?? sel.project, p?.services.get(sel.service)?.name ?? 'Project-level']
+}
+
+function TreeButton({ active, depth = 0, count, onClick, children, open, onToggle }: { active: boolean; depth?: number; count?: number; onClick: () => void; children: React.ReactNode; open?: boolean; onToggle?: () => void }) {
+  return (
+    <div
+      className={cx('flex items-center gap-1 rounded-md pr-2 text-sm', active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200')}
+      style={{ paddingLeft: 6 + depth * 14 }}
+    >
+      <button type="button" onClick={onToggle} className={cx('w-4 text-xs text-zinc-500', !onToggle && 'invisible')} aria-label={open ? 'Collapse' : 'Expand'}>
+        {open ? '▾' : '▸'}
+      </button>
+      <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center justify-between gap-2 py-1.5 text-left">
+        <span className="truncate">{children}</span>
+        {count != null && <span className="text-xs text-zinc-500">{count}</span>}
+      </button>
+    </div>
+  )
+}
+
+function SecretDetail({ secret, onChanged }: { secret: Secret; onChanged: () => void }) {
+  const { user } = useAuth()
+  const writable = !!user && canWrite(user.role)
+  const { services } = useServices(secret.project_key)
+  const [editing, setEditing] = useState(false)
+  return (
+    <div>
+      <div className="mb-2 text-xs text-zinc-500">
+        <Link to={`/projects/${secret.project_key}`} className="hover:text-zinc-300 hover:underline">Open {secret.project_name} →</Link>
+      </div>
+      <SecretRow key={secret.id} secret={secret} services={services ?? []} showService writable={writable} onEdit={() => setEditing(true)} onChanged={onChanged} />
+      {editing && (
+        <SecretForm
+          environmentId={secret.environment_id}
+          services={services ?? []}
+          defaultService=""
+          existing={secret}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false)
+            onChanged()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** "+ Add secret here": picks the environment if needed, then opens the regular form pre-filled with the folder's service. */
+function AddSecretHere({ projectKey, defaultService, defaultEnv, onClose, onSaved }: { projectKey: string; defaultService: string; defaultEnv: string; onClose: () => void; onSaved: () => void }) {
+  const { services } = useServices(projectKey)
+  const [envs, setEnvs] = useState<Environment[] | null>(null)
+  const [envId, setEnvId] = useState('')
+  const [chosen, setChosen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    api<{ environments: Environment[] }>(`/api/projects/${encodeURIComponent(projectKey)}/environments`)
+      .then((r) => {
+        setEnvs(r.environments)
+        const pre = r.environments.find((e) => e.name === defaultEnv) ?? (r.environments.length === 1 ? r.environments[0] : undefined)
+        setEnvId(pre?.id ?? r.environments[0]?.id ?? '')
+        if (pre) setChosen(true)
+      })
+      .catch((e) => setError(e.message))
+  }, [projectKey, defaultEnv])
+
+  if (chosen && envId && services) {
+    return <SecretForm environmentId={envId} services={services} defaultService={defaultService} onClose={onClose} onSaved={onSaved} />
+  }
+  return (
+    <Modal title="Add secret" onClose={onClose}>
+      <ErrorBox error={error} />
+      {!envs ? (
+        <Spinner />
+      ) : envs.length === 0 ? (
+        <p className="text-sm text-zinc-400">This project has no environments yet. Add one from the project page first.</p>
+      ) : (
+        <div className="space-y-4">
+          <Field label="Environment">
+            <Select value={envId} onChange={(e) => setEnvId(e.target.value)}>
+              {envs.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </Select>
+          </Field>
+          <Button onClick={() => setChosen(true)}>Continue</Button>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+/** ⌘K / Ctrl+K palette: jump straight to any secret. */
+function QuickFind({ secrets, onPick, onClose }: { secrets: Secret[]; onPick: (s: Secret) => void; onClose: () => void }) {
+  const [q, setQ] = useState('')
+  const [idx, setIdx] = useState(0)
+  const results = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    const hit = (s: Secret) => !t || [s.name, s.project_name, s.service_key ?? '', s.environment, ...s.tags].some((x) => x.toLowerCase().includes(t))
+    return secrets.filter(hit).slice(0, 12)
+  }, [q, secrets])
+  useEffect(() => setIdx(0), [q])
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setIdx((i) => Math.min(i + 1, results.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setIdx((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter' && results[idx]) {
+      e.preventDefault()
+      onPick(results[idx])
+    }
+  }
+  return (
+    <Modal title="Quick find" onClose={onClose}>
+      <div onKeyDown={onKey}>
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Jump to a secret…" autoFocus />
+        <ul className="mt-3 max-h-80 overflow-auto rounded-md border border-zinc-800 divide-y divide-zinc-800/70">
+          {results.length === 0 && <li className="px-3 py-3 text-sm text-zinc-500">No matches</li>}
+          {results.map((s, i) => (
+            <li key={s.id}>
+              <button onClick={() => onPick(s)} onMouseEnter={() => setIdx(i)} className={cx('flex w-full items-center justify-between gap-3 px-3 py-2 text-left', i === idx ? 'bg-zinc-800' : '')}>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-zinc-100 mono">{s.name}</span>
+                  <span className="text-xs text-zinc-500">{s.project_name}{s.service_key ? ` / ${s.service_key}` : ''}</span>
+                </span>
+                <Badge>{s.environment}</Badge>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-2 text-xs text-zinc-500">↑↓ to move · Enter to open · Esc to close</div>
+      </div>
+    </Modal>
+  )
+}
 
 export function VaultPage() {
   const [q, setQ] = useState('')
@@ -520,6 +730,26 @@ export function VaultPage() {
   const [expiring, setExpiring] = useState('')
   const [secrets, setSecrets] = useState<Secret[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [sel, setSel] = useState<Sel>({ kind: 'all' })
+  const [env, setEnv] = useState('')
+  const [openProjects, setOpenProjects] = useState<Set<string>>(new Set())
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [finding, setFinding] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const { user } = useAuth()
+  const writable = !!user && canWrite(user.role)
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setFinding(true)
+      }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -535,13 +765,70 @@ export function VaultPage() {
         .catch((e) => setError(e.message))
     }, 250)
     return () => clearTimeout(t)
-  }, [q, tag, expiring])
+  }, [q, tag, expiring, reloadKey])
 
-  const allTags = [...new Set((secrets ?? []).flatMap((s) => s.tags))].sort()
+  const all = secrets ?? []
+  const tree = useMemo(() => buildTree(all), [all])
+  const allTags = [...new Set(all.flatMap((s) => s.tags))].sort()
+  const searching = q.trim() !== '' || tag.trim() !== '' || expiring !== ''
+
+  const scoped = all.filter((s) => matches(sel, s))
+  const envs = [...new Set(scoped.map((s) => s.environment))].sort()
+  const activeEnv = envs.includes(env) ? env : ''
+  let list = scoped.filter((s) => !activeEnv || s.environment === activeEnv)
+  list = [...list].sort(
+    sel.kind === 'recent'
+      ? (a, b) => b.updated_at.localeCompare(a.updated_at)
+      : (a, b) => a.name.localeCompare(b.name) || a.environment.localeCompare(b.environment),
+  )
+  if (sel.kind === 'recent') list = list.slice(0, 25)
+  const selected = list.find((s) => s.id === selectedId) ?? null
+
+  const expSoon = all.filter((s) => s.days_left != null && s.days_left <= 30).length
+  const expired = all.filter((s) => s.days_left != null && s.days_left < 0).length
+
+  const toggle = (k: string) =>
+    setOpenProjects((cur) => {
+      const n = new Set(cur)
+      if (n.has(k)) n.delete(k)
+      else n.add(k)
+      return n
+    })
+  const choose = (s: Sel) => {
+    setSel(s)
+    setSelectedId(null)
+  }
+  const isOpen = (k: string) => searching || openProjects.has(k) || (sel.kind !== 'all' && 'project' in sel && sel.project === k)
+  const crumbs = selTitle(sel, tree)
+  const pick = (s: Secret) => {
+    setFinding(false)
+    setEnv('')
+    setSel({ kind: 'service', project: s.project_key, service: s.service_key ?? PROJECT_LEVEL })
+    setOpenProjects((c) => new Set(c).add(s.project_key))
+    setSelectedId(s.id)
+  }
+  const folderProject = sel.kind === 'project' || sel.kind === 'service' ? sel.project : null
+  const folderServiceId = sel.kind === 'service' ? (tree.find((p) => p.key === sel.project)?.services.get(sel.service)?.id ?? '') : ''
 
   return (
     <>
-      <PageHeader title="Vault" subtitle="Search secrets across all projects. Open a project to reveal, edit or restore a value." />
+      <PageHeader title="Vault" subtitle="Browse secrets by project and service. Select one to reveal, copy, edit or restore it."
+        actions={<Button variant="secondary" onClick={() => setFinding(true)}>Quick find <span className="ml-1 text-xs text-zinc-500">⌘K</span></Button>}
+      />
+
+      <div className="mb-4 grid grid-cols-3 gap-3 text-sm">
+        {[
+          ['Secrets', all.length, 'text-zinc-100'],
+          ['Expiring in 30d', expSoon - expired, expSoon - expired > 0 ? 'text-amber-300' : 'text-zinc-100'],
+          ['Expired', expired, expired > 0 ? 'text-red-400' : 'text-zinc-100'],
+        ].map(([label, n, cls]) => (
+          <Card key={label as string} className="px-4 py-3">
+            <div className="text-xs text-zinc-500">{label}</div>
+            <div className={cx('text-xl font-semibold', cls as string)}>{n}</div>
+          </Card>
+        ))}
+      </div>
+
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, project or service…" />
         <div>
@@ -556,38 +843,140 @@ export function VaultPage() {
         </Select>
       </div>
       <ErrorBox error={error} />
+
       {!secrets ? (
         <Spinner />
-      ) : secrets.length === 0 ? (
-        <Empty title="No secrets found">Try a different search, or add secrets from a project page.</Empty>
+      ) : all.length === 0 ? (
+        <Empty title="No secrets found">{searching ? 'Try a different search.' : 'Add secrets from a project page.'}</Empty>
       ) : (
-        <Card className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="border-b border-zinc-800 text-left text-xs text-zinc-500">
-              <tr>
-                <th className="px-4 py-2.5 font-medium">Secret</th>
-                <th className="px-4 py-2.5 font-medium">Project</th>
-                <th className="px-4 py-2.5 font-medium">Env</th>
-                <th className="px-4 py-2.5 font-medium">Tags</th>
-                <th className="px-4 py-2.5 font-medium">Expiry</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/70">
-              {secrets.map((s) => (
-                <tr key={s.id} className="hover:bg-zinc-800/30">
-                  <td className="px-4 py-2.5 text-zinc-100 mono">{s.name}</td>
-                  <td className="px-4 py-2.5">
-                    <Link to={`/projects/${s.project_key}`} className="text-zinc-300 hover:underline">{s.project_name}</Link>
-                    {s.service_key && <span className="ml-1.5"><ServiceBadge r={s} /></span>}
-                  </td>
-                  <td className="px-4 py-2.5"><Badge>{s.environment}</Badge></td>
-                  <td className="px-4 py-2.5"><span className="flex flex-wrap gap-1">{s.tags.map((t) => <Badge key={t} tone="sky">{t}</Badge>)}</span></td>
-                  <td className="px-4 py-2.5"><ExpiryBadge secret={s} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[230px_minmax(0,1fr)]">
+          {/* folder tree */}
+          <Card className="h-fit p-2">
+            <TreeButton active={sel.kind === 'all'} count={all.length} onClick={() => choose({ kind: 'all' })}>All secrets</TreeButton>
+            <div className="mt-1 space-y-0.5">
+              {tree.map((p) => {
+                const open = isOpen(p.key)
+                const svcs = [...p.services.entries()].sort(([a], [b]) => a.localeCompare(b))
+                return (
+                  <div key={p.key}>
+                    <TreeButton
+                      active={sel.kind === 'project' && sel.project === p.key}
+                      count={p.secrets.length}
+                      open={open}
+                      onToggle={() => toggle(p.key)}
+                      onClick={() => {
+                        choose({ kind: 'project', project: p.key })
+                        setOpenProjects((c) => new Set(c).add(p.key))
+                      }}
+                    >
+                      📁 {p.name}<ExpiryDot list={p.secrets} />
+                    </TreeButton>
+                    {open &&
+                      svcs.map(([sk, sv]) => (
+                        <TreeButton
+                          key={sk}
+                          depth={1}
+                          active={sel.kind === 'service' && sel.project === p.key && sel.service === sk}
+                          count={sv.secrets.length}
+                          onClick={() => choose({ kind: 'service', project: p.key, service: sk })}
+                        >
+                          {sk === PROJECT_LEVEL ? <span className="italic">project-level</span> : <>📦 {sv.name}</>}<ExpiryDot list={sv.secrets} />
+                        </TreeButton>
+                      ))}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="my-2 border-t border-zinc-800" />
+            <TreeButton active={sel.kind === 'expiring'} count={expSoon} onClick={() => choose({ kind: 'expiring' })}>⚠ Expiring soon</TreeButton>
+            <TreeButton active={sel.kind === 'recent'} onClick={() => choose({ kind: 'recent' })}>🕑 Recently changed</TreeButton>
+          </Card>
+
+          {/* list + detail */}
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h2 className="text-sm font-medium text-zinc-200">
+                {crumbs.map((c, i) => (
+                  <span key={i}>
+                    {i > 0 && <span className="px-1.5 text-zinc-600">/</span>}
+                    {c}
+                  </span>
+                ))}
+                <span className="ml-2 text-xs font-normal text-zinc-500">{list.length} secret{list.length === 1 ? '' : 's'}</span>
+              </h2>
+              {writable && folderProject && (
+                <Button variant="secondary" className="ml-auto py-1 text-xs" onClick={() => setAdding(true)}>+ Add secret here</Button>
+              )}
+              {envs.length > 1 && (
+                <div className="flex flex-wrap gap-1.5 basis-full">
+                  {['', ...envs].map((e) => (
+                    <button
+                      key={e || 'all'}
+                      onClick={() => setEnv(e)}
+                      className={cx(
+                        'rounded-md border px-2.5 py-1 text-xs',
+                        e === activeEnv ? 'border-emerald-600 bg-emerald-950/40 text-emerald-200' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200',
+                      )}
+                    >
+                      {e || 'all envs'}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {list.length === 0 ? (
+              <Empty title="Nothing here">No secrets match this folder.{writable && folderProject ? ' Use “+ Add secret here” to create one.' : ''}</Empty>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+                <Card className="h-fit overflow-hidden">
+                  <ul className="divide-y divide-zinc-800/70">
+                    {list.map((s) => (
+                      <li key={s.id}>
+                        <button
+                          onClick={() => setSelectedId(s.id)}
+                          className={cx('flex w-full items-center justify-between gap-3 border-l-[3px] px-4 py-2.5 text-left', expiryAccent(s), s.id === selectedId ? 'bg-zinc-800/70' : 'hover:bg-zinc-800/30')}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm text-zinc-100 mono">🔑 {s.name}</span>
+                            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
+                              {sel.kind !== 'service' && <span>{s.project_name}</span>}
+                              <ServiceBadge r={s} />
+                              <Badge>{s.environment}</Badge>
+                              {s.tags.map((t) => <Badge key={t} tone="sky">{t}</Badge>)}
+                            </span>
+                          </span>
+                          <ExpiryBadge secret={s} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+                <div className="min-w-0">
+                  {selected ? (
+                    <SecretDetail secret={selected} onChanged={() => setReloadKey((k) => k + 1)} />
+                  ) : (
+                    <Empty title="Select a secret">Pick one from the list to reveal, copy, edit or view its history.</Empty>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {finding && <QuickFind secrets={all} onPick={pick} onClose={() => setFinding(false)} />}
+      {adding && folderProject && (
+        <AddSecretHere
+          projectKey={folderProject}
+          defaultService={folderServiceId}
+          defaultEnv={activeEnv}
+          onClose={() => setAdding(false)}
+          onSaved={() => {
+            setAdding(false)
+            setReloadKey((k) => k + 1)
+          }}
+        />
       )}
     </>
   )
