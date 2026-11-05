@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, canWrite, type Job, type Project, type Secret } from '../api'
+import { api, canWrite, type HealthCheck, type Job, type Project, type Secret } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo } from '../ui'
+import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo, type DotStatus } from '../ui'
 import { JobTable } from './jobs'
+import { degradedReason, ProjectChecks } from './health'
 import { ExpiryBadge, ProjectVault } from './vault'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
@@ -18,17 +19,37 @@ function slugify(s: string) {
     .replace(/-+$/, '')
 }
 
+interface AttentionItem {
+  id: string
+  tone: 'red' | 'amber'
+  label: string
+  title: string
+  sub: string
+  to: string
+  right?: ReactNode
+}
+
+const SEVERITY: Record<string, number> = { down: 0, degraded: 1, unknown: 2, up: 3, none: 4 }
+
+function projectDot(p: Project): DotStatus {
+  if (p.health_status !== 'none') return p.health_status
+  if (p.failing_jobs > 0) return 'failed'
+  return 'none'
+}
+
 export function DashboardPage() {
   const { user, meta } = useAuth()
   const [projects, setProjects] = useState<Project[] | null>(null)
+  const [checks, setChecks] = useState<HealthCheck[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [expiring, setExpiring] = useState<Secret[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api<{ projects: Project[] }>('/api/projects')
       .then((r) => setProjects(r.projects))
       .catch((e) => setError(e.message))
+    api<{ checks: HealthCheck[] }>('/api/checks').then((r) => setChecks(r.checks)).catch(() => {})
     if (meta?.modules.scheduler) {
       api<{ jobs: Job[] }>('/api/jobs').then((r) => setJobs(r.jobs)).catch(() => {})
     }
@@ -37,92 +58,123 @@ export function DashboardPage() {
     }
   }, [meta])
 
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30_000)
+    return () => clearInterval(t)
+  }, [load])
+
   if (error) return <ErrorBox error={error} />
   if (!projects) return <Spinner />
 
-  const enabled = jobs.filter((j) => j.enabled)
-  const failing = enabled.filter((j) => j.last_status === 'failed')
+  const active = checks.filter((c) => c.enabled)
+  const down = active.filter((c) => c.status === 'down')
+  const degraded = active.filter((c) => c.status === 'degraded')
+  const failingJobs = jobs.filter((j) => j.enabled && j.last_status === 'failed')
+
+  const items: AttentionItem[] = [
+    ...down.map((c): AttentionItem => ({
+      id: `d${c.id}`, tone: 'red', label: 'Down', title: c.name, to: `/checks/${c.id}`,
+      sub: `${c.project_name}${c.last_error ? ` · ${c.last_error}` : ''}${c.status_since ? ` · since ${timeAgo(c.status_since)}` : ''}`,
+    })),
+    ...degraded.map((c): AttentionItem => ({
+      id: `g${c.id}`, tone: 'amber', label: 'Degraded', title: c.name, to: `/checks/${c.id}`,
+      sub: `${c.project_name} · ${degradedReason(c)}`,
+    })),
+    ...failingJobs.map((j): AttentionItem => ({
+      id: `j${j.id}`, tone: 'red', label: 'Job failed', title: j.name, to: `/jobs/${j.id}`,
+      sub: `${j.project_name ?? 'No project'}${j.last_run_at ? ` · last run ${timeAgo(j.last_run_at)}` : ''}`,
+    })),
+    ...expiring.map((s): AttentionItem => ({
+      id: `s${s.id}`, tone: (s.days_left ?? 0) <= 7 ? 'red' : 'amber', label: 'Key expiring', title: s.name,
+      to: `/projects/${s.project_key}`, sub: `${s.project_name} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
+    })),
+  ]
+
+  const sorted = [...projects].sort(
+    (a, b) => SEVERITY[a.health_status] - SEVERITY[b.health_status] || b.failing_jobs - a.failing_jobs || a.name.localeCompare(b.name),
+  )
 
   return (
     <>
       <PageHeader
         title="Dashboard"
-        subtitle={`${projects.length} project${projects.length === 1 ? '' : 's'}`}
+        subtitle={`${projects.length} project${projects.length === 1 ? '' : 's'} · ${active.length} health check${active.length === 1 ? '' : 's'}`}
         actions={user && canWrite(user.role) && <Link to="/projects/new"><Button>New project</Button></Link>}
       />
 
-      {(meta?.modules.scheduler || meta?.modules.vault) && (
-        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {meta?.modules.scheduler && (
-            <>
-              <Stat label="Active jobs" value={enabled.length} />
-              <Stat label="Failing jobs" value={failing.length} tone={failing.length ? 'red' : undefined} />
-              <Stat label="Paused jobs" value={jobs.length - enabled.length} />
-            </>
-          )}
-          {meta?.modules.vault && <Stat label="Keys expiring (30 days)" value={expiring.length} tone={expiring.length ? 'red' : undefined} />}
-        </div>
-      )}
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Checks down" value={down.length} tone={down.length ? 'red' : undefined} />
+        <Stat label="Checks degraded" value={degraded.length} tone={degraded.length ? 'amber' : undefined} />
+        {meta?.modules.scheduler && <Stat label="Failing jobs" value={failingJobs.length} tone={failingJobs.length ? 'red' : undefined} />}
+        {meta?.modules.vault && <Stat label="Keys expiring (30 days)" value={expiring.length} tone={expiring.length ? 'amber' : undefined} />}
+      </div>
 
-      {expiring.length > 0 && (
-        <Card className="mb-6 overflow-hidden">
-          <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Keys expiring soon</div>
-          <ul className="divide-y divide-zinc-800/70">
-            {expiring.slice(0, 8).map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
-                <span className="min-w-0 truncate">
-                  <Link to={`/projects/${s.project_key}`} className="text-zinc-100 hover:underline mono">{s.name}</Link>
-                  <span className="ml-2 text-zinc-500">{s.project_name} · {s.environment}</span>
-                </span>
-                <ExpiryBadge secret={s} />
-              </li>
-            ))}
-          </ul>
-          {expiring.length > 8 && (
-            <Link to="/vault" className="block border-t border-zinc-800 px-4 py-2 text-xs text-emerald-400 hover:text-emerald-300">
-              View all {expiring.length} in the Vault →
-            </Link>
-          )}
-        </Card>
-      )}
+      {projects.length > 0 &&
+        (items.length > 0 ? (
+          <Card className="mb-6 overflow-hidden">
+            <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Needs attention · {items.length}</div>
+            <ul className="divide-y divide-zinc-800/70">
+              {items.slice(0, 12).map((i) => (
+                <li key={i.id}>
+                  <Link to={i.to} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <Badge tone={i.tone}>{i.label}</Badge>
+                      <span className="min-w-0">
+                        <span className="text-zinc-100">{i.title}</span>
+                        <span className="ml-2 text-xs text-zinc-500">{i.sub}</span>
+                      </span>
+                    </span>
+                    {i.right}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            {items.length > 12 && <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-500">…and {items.length - 12} more</div>}
+          </Card>
+        ) : (
+          <Card className="mb-6 flex items-center gap-3 px-4 py-3 text-sm text-zinc-300">
+            <StatusDot status="up" />
+            {active.length > 0 ? 'All clear — every check is up and nothing needs attention.' : 'Nothing needs attention. Add health checks to start monitoring your projects.'}
+          </Card>
+        ))}
 
       {projects.length === 0 ? (
-        <Empty title="No projects yet">Create a project, then add keepalive jobs to it.</Empty>
+        <Empty title="No projects yet">Create a project, then add health checks and keepalive jobs to it.</Empty>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {projects.map((p) => {
-            const pj = jobs.filter((j) => j.project_id === p.id)
-            const last = pj.map((j) => j.last_run_at).filter(Boolean).sort().pop() ?? null
-            const status = p.failing_jobs > 0 ? 'failed' : pj.some((j) => j.last_status === 'success') ? 'success' : 'none'
-            return (
-              <Link key={p.id} to={`/projects/${p.key}`}>
-                <Card className="h-full p-4 transition hover:border-zinc-600">
-                  <div className="flex items-center gap-2">
-                    <StatusDot status={status} />
-                    <span className="truncate font-medium text-zinc-100">{p.name}</span>
-                  </div>
-                  <div className="mt-1 text-xs text-zinc-500 mono">{p.key}</div>
-                  {p.description && <p className="mt-2 line-clamp-2 text-sm text-zinc-400">{p.description}</p>}
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                    <Badge>{p.job_count} job{p.job_count === 1 ? '' : 's'}</Badge>
-                    {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} failing</Badge>}
-                    {last && <span>last run {timeAgo(last)}</span>}
-                  </div>
-                </Card>
-              </Link>
-            )
-          })}
+          {sorted.map((p) => (
+            <Link key={p.id} to={`/projects/${p.key}`}>
+              <Card className="h-full p-4 transition hover:border-zinc-600">
+                <div className="flex items-center gap-2">
+                  <StatusDot status={projectDot(p)} />
+                  <span className="truncate font-medium text-zinc-100">{p.name}</span>
+                </div>
+                <div className="mt-1 text-xs text-zinc-500 mono">{p.key}</div>
+                {p.description && <p className="mt-2 line-clamp-2 text-sm text-zinc-400">{p.description}</p>}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                  {p.health_status === 'down' && <Badge tone="red">down</Badge>}
+                  {p.health_status === 'degraded' && <Badge tone="amber">degraded</Badge>}
+                  {p.health_status === 'up' && <Badge tone="green">up</Badge>}
+                  <Badge>{p.check_count} check{p.check_count === 1 ? '' : 's'}</Badge>
+                  <Badge>{p.job_count} job{p.job_count === 1 ? '' : 's'}</Badge>
+                  {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} failing</Badge>}
+                </div>
+              </Card>
+            </Link>
+          ))}
         </div>
       )}
     </>
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'red' }) {
+function Stat({ label, value, tone }: { label: string; value: number; tone?: 'red' | 'amber' }) {
+  const color = tone === 'red' ? 'text-red-400' : tone === 'amber' ? 'text-amber-300' : 'text-zinc-100'
   return (
     <Card className="px-4 py-3">
       <div className="text-xs text-zinc-500">{label}</div>
-      <div className={tone === 'red' ? 'mt-1 text-2xl font-semibold text-red-400' : 'mt-1 text-2xl font-semibold text-zinc-100'}>{value}</div>
+      <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
     </Card>
   )
 }
@@ -222,7 +274,7 @@ export function ProjectDetailPage() {
   if (!project) return <Spinner />
 
   const remove = async () => {
-    if (!confirm(`Delete project "${project.name}" with all its jobs and secrets? This cannot be undone.`)) return
+    if (!confirm(`Delete project "${project.name}" with all its health checks, jobs and secrets? This cannot be undone.`)) return
     try {
       await api(`/api/projects/${project.key}`, { method: 'DELETE' })
       navigate('/')
@@ -258,6 +310,8 @@ export function ProjectDetailPage() {
       ) : (
         project.description && <p className="mb-6 max-w-3xl whitespace-pre-wrap text-sm text-zinc-400">{project.description}</p>
       )}
+
+      <ProjectChecks project={project} />
 
       {meta?.modules.vault && <ProjectVault project={project} />}
 

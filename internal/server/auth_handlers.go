@@ -23,9 +23,9 @@ const (
 
 // Next-step values returned to the UI after login.
 const (
-	nextOK         = "ok"
-	next2FAVerify  = "2fa_verify"
-	next2FAEnroll  = "2fa_enroll"
+	nextOK        = "ok"
+	next2FAVerify = "2fa_verify"
+	next2FAEnroll = "2fa_enroll"
 )
 
 type authCtx struct {

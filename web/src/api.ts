@@ -72,6 +72,63 @@ export interface Project {
   updated_at: string
   job_count: number
   failing_jobs: number
+  health_status: HealthStatus | 'none'
+  check_count: number
+}
+
+export type HealthStatus = 'up' | 'degraded' | 'down' | 'unknown'
+
+export interface HealthCheck {
+  id: string
+  project_id: string
+  project_key: string
+  project_name: string
+  name: string
+  url: string
+  method: string
+  interval_seconds: number
+  timeout_seconds: number
+  expected_status: string
+  max_response_ms: number | null
+  ssl_warn_days: number | null
+  down_threshold: number
+  recovery_threshold: number
+  enabled: boolean
+  status: HealthStatus
+  consecutive_failures: number
+  consecutive_successes: number
+  status_since: string | null
+  last_checked_at: string | null
+  last_response_ms: number | null
+  last_status_code: number | null
+  last_error: string | null
+  ssl_expires_at: string | null
+  next_check_at: string | null
+  uptime_24h: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface HealthEvent {
+  id: number
+  at: string
+  from_status: HealthStatus
+  to_status: HealthStatus
+  message: string
+}
+
+export interface Uptime {
+  '24h': number | null
+  '7d': number | null
+  '30d': number | null
+}
+
+export interface SeriesBucket {
+  t: string
+  avg_ms: number | null
+  max_ms: number | null
+  ok: number
+  fail: number
 }
 
 export interface Job {

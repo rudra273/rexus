@@ -97,12 +97,18 @@ export function PageHeader({ title, subtitle, actions }: { title: ReactNode; sub
   )
 }
 
-export function StatusDot({ status }: { status: 'success' | 'failed' | 'running' | 'disabled' | 'none' | null }) {
-  const map = {
+export type DotStatus = 'success' | 'failed' | 'running' | 'disabled' | 'none' | 'up' | 'degraded' | 'down' | 'unknown'
+
+export function StatusDot({ status }: { status: DotStatus | null }) {
+  const map: Record<DotStatus, string> = {
     success: 'bg-emerald-400',
+    up: 'bg-emerald-400',
     failed: 'bg-red-500',
+    down: 'bg-red-500',
+    degraded: 'bg-amber-400',
     running: 'bg-sky-400 animate-pulse',
     disabled: 'bg-zinc-600',
+    unknown: 'bg-zinc-600',
     none: 'bg-zinc-600',
   }
   return <span className={cx('inline-block h-2.5 w-2.5 shrink-0 rounded-full', map[status ?? 'none'])} />

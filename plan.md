@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–3 built** — next is Phase 4 (Health checks & dashboard). See §13.
+Status: **Phases 1–4 built** — next is Phase 5 (Alerts). See §13.
 
 ---
 
@@ -475,7 +475,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** engineers can be invited and see only what their role allows.
 
-### Phase 4 — Health checks & dashboard
+### Phase 4 — Health checks & dashboard ✅ built
+> Built Nov 2026. Notes: every threshold in §7.1 is configurable per check; status changes are stored in `health_events` (with the reason), which Phase 5 alerts will send; probe results are kept 30 days; health checks always run (they are system jobs, independent of `REXUS_MODULE_SCHEDULER`); GET/HEAD only, redirects followed, no custom request headers yet; the dashboard has a "Needs attention" list combining down/degraded checks, failing jobs and expiring keys. Domain-expiry checks are not built yet.
 - Configurable health checks (§7.1): status code, response time, SSL expiry, down/recovery thresholds.
 - Project status (up / degraded / down) and dashboard: overview of all projects, uptime %, response-time chart, expiring secrets list, failed jobs.
 

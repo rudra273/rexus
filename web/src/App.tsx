@@ -2,6 +2,7 @@ import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-rou
 import { api, isAdmin } from './api'
 import { useAuth } from './auth'
 import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from './pages/auth'
+import { CheckDetailPage, CheckFormPage } from './pages/health'
 import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
@@ -52,6 +53,9 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/projects/new" element={<ProjectNewPage />} />
         <Route path="/projects/:key" element={<ProjectDetailPage />} />
+        <Route path="/projects/:key/checks/new" element={<CheckFormPage />} />
+        <Route path="/checks/:id" element={<CheckDetailPage />} />
+        <Route path="/checks/:id/edit" element={<CheckFormPage />} />
         {meta.modules.scheduler && (
           <>
             <Route path="/jobs" element={<JobsPage />} />

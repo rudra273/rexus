@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 3** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, and **team management** (invites, four roles, password resets, audit log). See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 4** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management** (invites, four roles, password resets, audit log), and **health checks with a dashboard**. See [plan.md](plan.md) for the full roadmap.
 
 ## Quick start (Docker)
 
@@ -62,6 +62,26 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 | `rexus keygen` | Generate a `REXUS_MASTER_KEY` |
 
 Whoever can run commands on the server can recover the owner — no secret owner key lives in code or env vars.
+
+## Health checks and the dashboard
+
+Open a project and click **Add check** to watch a URL. Each check is configured in the UI:
+
+| Setting | What it does |
+|---|---|
+| URL, GET or HEAD | What to request. Redirects are followed. |
+| Check every | 1 minute to 24 hours (default 5 minutes). |
+| Timeout | A slower response counts as a failure. |
+| Expected status | `200`, a range like `200-299`, or a list like `200,301`. |
+| Slow above (optional) | Marks the check **degraded** when the response takes longer than this many ms. |
+| SSL warning (optional, https only) | Marks the check **degraded** when the certificate expires within this many days. |
+| Down after / Up again after | How many failures (or successes) **in a row** it takes to change status. The default of 3 failures stops one blip from raising a false alarm. |
+
+A check is 🟢 **Up**, 🟡 **Degraded** (slow, or SSL expiring), or 🔴 **Down**. A project shows the worst status among its enabled checks. Each check page has a response-time chart (1 hour to 30 days), uptime for 24 hours / 7 days / 30 days, the SSL expiry date, and a list of status changes with the reason.
+
+The **Dashboard** lists everything that needs attention across all projects — checks that are down or degraded, failed jobs, and keys about to expire — with the most serious projects first. Probe results are kept for 30 days.
+
+Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
 ## Team and permissions
 

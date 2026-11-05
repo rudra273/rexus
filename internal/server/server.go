@@ -145,6 +145,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{key}", s.authed(s.handleUpdateProject))
 	mux.HandleFunc("DELETE /api/projects/{key}", s.authed(s.handleDeleteProject))
 
+	// Health checks (system jobs: always on, regardless of the scheduler module)
+	mux.HandleFunc("GET /api/checks", s.authed(s.handleListChecks))
+	mux.HandleFunc("GET /api/projects/{key}/checks", s.authed(s.handleListProjectChecks))
+	mux.HandleFunc("POST /api/projects/{key}/checks", s.authed(s.handleCreateCheck))
+	mux.HandleFunc("GET /api/checks/{id}", s.authed(s.handleGetCheck))
+	mux.HandleFunc("PUT /api/checks/{id}", s.authed(s.handleUpdateCheck))
+	mux.HandleFunc("DELETE /api/checks/{id}", s.authed(s.handleDeleteCheck))
+	mux.HandleFunc("POST /api/checks/{id}/run", s.authed(s.handleRunCheck))
+	mux.HandleFunc("GET /api/checks/{id}/series", s.authed(s.handleCheckSeries))
+
 	if s.cfg.ModuleScheduler {
 		mux.HandleFunc("GET /api/jobs", s.authed(s.handleListJobs))
 		mux.HandleFunc("POST /api/jobs", s.authed(s.handleCreateJob))

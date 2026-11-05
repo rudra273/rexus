@@ -68,17 +68,13 @@ func (e *Engine) Start(ctx context.Context) {
 		defer prune.Stop()
 
 		e.housekeeping(ctx)
-		if e.userJobs {
-			e.tick(ctx)
-		}
+		e.tickAll(ctx)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-poll.C:
-				if e.userJobs {
-					e.tick(ctx)
-				}
+				e.tickAll(ctx)
 			case <-prune.C:
 				e.housekeeping(ctx)
 			}
@@ -87,7 +83,7 @@ func (e *Engine) Start(ctx context.Context) {
 	if e.userJobs {
 		e.log.Info("scheduler started", "poll", pollInterval.String())
 	} else {
-		e.log.Info("scheduler: user jobs disabled (REXUS_MODULE_SCHEDULER=false)")
+		e.log.Info("scheduler: user jobs disabled (REXUS_MODULE_SCHEDULER=false); health checks still run")
 	}
 }
 
@@ -102,9 +98,21 @@ func (e *Engine) Wait(timeout time.Duration) {
 	}
 }
 
+// tickAll runs everything that is due. Health checks are system jobs and
+// always run; user cron jobs run only when REXUS_MODULE_SCHEDULER is on.
+func (e *Engine) tickAll(ctx context.Context) {
+	if e.userJobs {
+		e.tick(ctx)
+	}
+	e.tickHealth(ctx)
+}
+
 func (e *Engine) housekeeping(ctx context.Context) {
 	if err := e.store.PruneRuns(ctx, runRetention); err != nil {
 		e.log.Error("scheduler: prune runs", "err", err)
+	}
+	if err := e.store.PruneHealthResults(ctx, healthRetention); err != nil {
+		e.log.Error("scheduler: prune health results", "err", err)
 	}
 	if err := e.store.PruneSessions(ctx); err != nil {
 		e.log.Error("scheduler: prune sessions", "err", err)
