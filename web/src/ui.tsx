@@ -1,6 +1,6 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -11,7 +11,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 sm:py-10"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="w-full max-w-xl rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-xl">
+      <div className={cx('w-full rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-xl', wide ? 'max-w-2xl' : 'max-w-xl')}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-semibold text-zinc-50">{title}</h2>
           <button onClick={onClose} aria-label="Close" className="text-zinc-500 hover:text-zinc-200">✕</button>

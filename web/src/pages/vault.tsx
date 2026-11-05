@@ -167,6 +167,8 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
       {form && envId && (
         <SecretForm
           environmentId={envId}
+          environments={envs ?? undefined}
+          projectKey={project.key}
           services={services}
           defaultService={scope && scope !== '-' ? scope : ''}
           existing={form.existing}
@@ -287,7 +289,6 @@ export function SecretRow({ secret, services, showService, showProject, writable
               <Badge key={t} tone="sky">{t}</Badge>
             ))}
           </div>
-          <div className="mt-1 text-xs text-zinc-500">updated {timeAgo(secret.updated_at)}{secret.updated_by ? ` by ${secret.updated_by}` : ''}</div>
         </div>
         {writable && (
           <div className="flex items-center gap-0.5">
@@ -297,7 +298,7 @@ export function SecretRow({ secret, services, showService, showProject, writable
               <button className={ib} title="Reveal" aria-label="Reveal" onClick={() => reveal()}><Icon name="eye" /></button>
             )}
             <button className={ib} title="Copy value" aria-label="Copy value" onClick={copy}><Icon name="copy" /></button>
-            <button className={cx(ib, showHistory && 'bg-zinc-800 text-zinc-100')} title="History" aria-label="History" onClick={toggleHistory}><Icon name="history" /></button>
+            <button className={cx(ib, showHistory && 'bg-zinc-800 text-zinc-100')} title={`History · updated ${timeAgo(secret.updated_at)}${secret.updated_by ? ` by ${secret.updated_by}` : ''}`} aria-label="History" onClick={toggleHistory}><Icon name="history" /></button>
             <button className={ib} title="Edit" aria-label="Edit" onClick={onEdit}><Icon name="edit" /></button>
             {(services.length > 0 || secret.service_id) && <button className={ib} title="Move" aria-label="Move" onClick={() => setMoving(true)}><Icon name="move" /></button>}
             <button className={cx(ib, 'hover:!text-red-400')} title="Delete" aria-label="Delete" onClick={remove}><Icon name="trash" /></button>
@@ -405,7 +406,13 @@ function MoveSecret({ secret, services, onClose, onMoved }: { secret: Secret; se
   )
 }
 
-export function SecretForm({ environmentId, services, defaultService, existing, onClose, onSaved }: { environmentId: string; services: Service[]; defaultService: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
+export function SecretForm({ environmentId, environments, projectKey, services: initialServices, defaultService, existing, onClose, onSaved }: { environmentId: string; environments?: Environment[]; projectKey?: string; services: Service[]; defaultService: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
+  const [envId, setEnvId] = useState(environmentId)
+  const [services, setServices] = useState(initialServices)
+  const pkey = projectKey ?? existing?.project_key ?? ''
+  const [newSvc, setNewSvc] = useState<{ name: string; key: string; touched: boolean } | null>(null)
+  const [svcBusy, setSvcBusy] = useState(false)
+  const [svcError, setSvcError] = useState<string | null>(null)
   const [serviceId, setServiceId] = useState(existing?.service_id ?? defaultService)
   const [name, setName] = useState(existing?.name ?? '')
   const [value, setValue] = useState('')
@@ -432,7 +439,7 @@ export function SecretForm({ environmentId, services, defaultService, existing, 
     if (!existing) body.service_id = serviceId
     try {
       if (existing) await api(`/api/secrets/${existing.id}`, { method: 'PATCH', body })
-      else await api(`/api/environments/${environmentId}/secrets`, { method: 'POST', body })
+      else await api(`/api/environments/${envId}/secrets`, { method: 'POST', body })
       onSaved()
     } catch (err) {
       setError((err as Error).message)
@@ -441,78 +448,151 @@ export function SecretForm({ environmentId, services, defaultService, existing, 
     }
   }
 
+  const createService = async () => {
+    if (!newSvc || !pkey) return
+    setSvcBusy(true)
+    setSvcError(null)
+    try {
+      const r = await api<{ service: Service }>(`/api/projects/${encodeURIComponent(pkey)}/services`, {
+        method: 'POST',
+        body: { name: newSvc.name, key: newSvc.key, description: '', repository_url: '', root_directory: '' },
+      })
+      setServices((cur) => [...cur, r.service])
+      setServiceId(r.service.id)
+      setNewSvc(null)
+    } catch (err) {
+      setSvcError((err as Error).message)
+    } finally {
+      setSvcBusy(false)
+    }
+  }
+  const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/^[^a-z]+/, '').slice(0, 40).replace(/-+$/, '')
+
   const masked = (showValue ? {} : { WebkitTextSecurity: 'disc' }) as CSSProperties
 
+  const hasMore = !!existing && (!!existing.notes || fields.length > 0)
+  const [more, setMore] = useState(hasMore)
+  const label = 'text-sm font-medium text-zinc-300'
+
   return (
-    <Modal title={existing ? `Edit ${existing.name}` : 'Add secret'} onClose={onClose}>
+    <Modal title={existing ? `Edit ${existing.name}` : 'Add secret'} onClose={onClose} wide>
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Name" hint="Letters, numbers, dots, dashes and underscores — e.g. STRIPE_SECRET_KEY">
-          <Input value={name} onChange={(e) => setName(e.target.value)} className="mono" autoFocus required />
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="mono" placeholder="e.g. STRIPE_SECRET_KEY" title="Letters, numbers, dots, dashes and underscores" autoFocus required />
         </Field>
-        {services.length > 0 && (
-          <Field label="Service" hint={existing ? 'Use “Move” to change where this secret belongs.' : 'Secrets of the project itself are not shared with services automatically.'}>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <span className={label}>Environment</span>
+            {existing || !environments || environments.length === 0 ? (
+              <Select disabled>
+                <option>{existing?.environment ?? environments?.find((e) => e.id === envId)?.name ?? '—'}</option>
+              </Select>
+            ) : (
+              <Select value={envId} onChange={(e) => setEnvId(e.target.value)}>
+                {environments.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </Select>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className={label}>Service</span>
+              {!existing && pkey && !newSvc && (
+                <button type="button" className="text-xs text-emerald-400 hover:text-emerald-300" onClick={() => setNewSvc({ name: '', key: '', touched: false })}>+ New service</button>
+              )}
+            </div>
             <ServiceSelect services={services} value={serviceId} onChange={setServiceId} disabled={!!existing} />
-          </Field>
+          </div>
+        </div>
+        {existing && <p className="-mt-2 text-xs text-zinc-500">Environment and service are fixed here — use “Move” on the card to change the service.</p>}
+
+        {newSvc && (
+          <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Input value={newSvc.name} placeholder="Service name, e.g. Backend" autoFocus onChange={(e) => setNewSvc({ ...newSvc, name: e.target.value, key: newSvc.touched ? newSvc.key : slug(e.target.value) })} />
+              <Input value={newSvc.key} placeholder="key, e.g. backend" className="mono" onChange={(e) => setNewSvc({ ...newSvc, key: e.target.value.toLowerCase(), touched: true })} />
+            </div>
+            <ErrorBox error={svcError} />
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" className="py-1.5" disabled={svcBusy || !newSvc.name || newSvc.key.length < 2} onClick={createService}>{svcBusy ? 'Creating…' : 'Create service'}</Button>
+              <Button type="button" variant="ghost" className="py-1.5" onClick={() => setNewSvc(null)}>Cancel</Button>
+            </div>
+          </div>
         )}
-        <Field
-          label={existing ? 'New value' : 'Value'}
-          hint={existing ? `Leave blank to keep the current value (v${existing.current_version}). A new value is saved as v${existing.current_version + 1}.` : 'Encrypted before it is stored.'}
-        >
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className={label}>{existing ? 'New value' : 'Value'}</span>
+            <span className="flex items-center gap-2 text-xs text-zinc-500">
+              <span>Encrypted before it is stored</span>
+              <button type="button" onClick={() => setShowValue(!showValue)} title={showValue ? 'Hide value' : 'Show value'} aria-label={showValue ? 'Hide value' : 'Show value'} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+                <Icon name={showValue ? 'eyeoff' : 'eye'} />
+              </button>
+            </span>
+          </div>
           <Textarea
             value={value}
             onChange={(e) => setValue(e.target.value)}
             rows={3}
             style={masked}
             className="mono"
+            placeholder={existing ? `Leave blank to keep the current value (v${existing.current_version})` : 'Paste the secret value'}
             autoComplete="off"
             spellCheck={false}
             required={!existing}
           />
-        </Field>
-        <label className="-mt-2 flex items-center gap-2 text-xs text-zinc-400">
-          <input type="checkbox" checked={showValue} onChange={(e) => setShowValue(e.target.checked)} className="accent-emerald-500" />
-          Show value while typing
-        </label>
+          {existing && value && <p className="text-xs text-zinc-500">Saved as v{existing.current_version + 1}.</p>}
+        </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Expiry date (optional)" hint="You'll be reminded before it expires.">
+          <Field label="Expiry date">
             <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
           </Field>
-          <Field label="Tags (optional)" hint="Comma-separated, e.g. payment, third-party">
-            <Input value={tags} onChange={(e) => setTags(e.target.value)} />
+          <Field label="Tags">
+            <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="payment, third-party" />
           </Field>
         </div>
 
-        <Field label="Notes (optional)">
-          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. rotate via the Stripe dashboard" />
-        </Field>
-
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-zinc-300">Custom fields</span>
-            <button type="button" className="text-xs text-emerald-400 hover:text-emerald-300" onClick={() => setFields([...fields, { name: '', value: '' }])}>+ Add field</button>
-          </div>
-          {fields.length === 0 ? (
-            <p className="text-xs text-zinc-500">e.g. provider, owner, dashboard URL. These are <b>not</b> encrypted — don't put secrets here.</p>
-          ) : (
-            <div className="space-y-2">
-              {fields.map((f, i) => (
-                <div key={i} className="flex gap-2">
-                  <div className="w-2/5 shrink-0">
-                    <Input value={f.name} placeholder="Field" onChange={(e) => setFields(fields.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
-                  </div>
-                  <Input value={f.value} placeholder="Value" onChange={(e) => setFields(fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
-                  <Button type="button" variant="ghost" onClick={() => setFields(fields.filter((_, j) => j !== i))} aria-label="Remove field">✕</Button>
+          <button type="button" onClick={() => setMore(!more)} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200" aria-expanded={more}>
+            <Icon name="chevron" className={cx('h-3 w-3 transition-transform', more && 'rotate-90')} />
+            Notes &amp; custom fields
+            {!more && (notes || fields.length > 0) && <span className="text-xs text-zinc-500">· filled</span>}
+          </button>
+          {more && (
+            <div className="mt-3 space-y-4">
+              <Field label="Notes">
+                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. rotate via the Stripe dashboard" />
+              </Field>
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className={label}>Custom fields <span className="text-xs font-normal text-zinc-500">· not encrypted</span></span>
+                  <button type="button" className="text-xs text-emerald-400 hover:text-emerald-300" onClick={() => setFields([...fields, { name: '', value: '' }])}>+ Add field</button>
                 </div>
-              ))}
+                {fields.length === 0 ? (
+                  <p className="text-xs text-zinc-500">e.g. provider, owner, dashboard URL. Don’t put secrets here.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {fields.map((f, i) => (
+                      <div key={i} className="flex gap-2">
+                        <div className="w-2/5 shrink-0">
+                          <Input value={f.name} placeholder="Field" onChange={(e) => setFields(fields.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                        </div>
+                        <Input value={f.value} placeholder="Value" onChange={(e) => setFields(fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+                        <Button type="button" variant="ghost" onClick={() => setFields(fields.filter((_, j) => j !== i))} aria-label="Remove field">✕</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
 
         <ErrorBox error={error} />
-        <div className="flex gap-2">
-          <Button type="submit" disabled={busy}>{busy ? 'Saving…' : existing ? 'Save changes' : 'Add secret'}</Button>
+        <div className="flex justify-end gap-2 border-t border-zinc-800 pt-4">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={busy}>{busy ? 'Saving…' : existing ? 'Save changes' : 'Add secret'}</Button>
         </div>
       </form>
     </Modal>
@@ -700,44 +780,25 @@ function VaultSecret({ secret, showProject, onEdit, onChanged }: { secret: Secre
   return <SecretRow secret={secret} services={services ?? []} showService showProject={showProject} writable={writable} onEdit={onEdit} onChanged={onChanged} />
 }
 
-/** "+ Add secret here": picks the environment if needed, then opens the regular form pre-filled with the folder's service. */
+/** "+ Add secret here": opens the regular form pre-filled with the folder's service and the selected environment. */
 function AddSecretHere({ projectKey, defaultService, defaultEnv, onClose, onSaved }: { projectKey: string; defaultService: string; defaultEnv: string; onClose: () => void; onSaved: () => void }) {
   const { services } = useServices(projectKey)
   const [envs, setEnvs] = useState<Environment[] | null>(null)
-  const [envId, setEnvId] = useState('')
-  const [chosen, setChosen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     api<{ environments: Environment[] }>(`/api/projects/${encodeURIComponent(projectKey)}/environments`)
-      .then((r) => {
-        setEnvs(r.environments)
-        const pre = r.environments.find((e) => e.name === defaultEnv) ?? (r.environments.length === 1 ? r.environments[0] : undefined)
-        setEnvId(pre?.id ?? r.environments[0]?.id ?? '')
-        if (pre) setChosen(true)
-      })
+      .then((r) => setEnvs(r.environments))
       .catch((e) => setError(e.message))
-  }, [projectKey, defaultEnv])
+  }, [projectKey])
 
-  if (chosen && envId && services) {
-    return <SecretForm environmentId={envId} services={services} defaultService={defaultService} onClose={onClose} onSaved={onSaved} />
+  if (envs && envs.length > 0 && services) {
+    const pre = envs.find((e) => e.name === defaultEnv) ?? envs[0]
+    return <SecretForm environmentId={pre.id} environments={envs} projectKey={projectKey} services={services} defaultService={defaultService} onClose={onClose} onSaved={onSaved} />
   }
   return (
     <Modal title="Add secret" onClose={onClose}>
       <ErrorBox error={error} />
-      {!envs ? (
-        <Spinner />
-      ) : envs.length === 0 ? (
-        <p className="text-sm text-zinc-400">This project has no environments yet. Add one from the project page first.</p>
-      ) : (
-        <div className="space-y-4">
-          <Field label="Environment">
-            <Select value={envId} onChange={(e) => setEnvId(e.target.value)}>
-              {envs.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </Select>
-          </Field>
-          <Button onClick={() => setChosen(true)}>Continue</Button>
-        </div>
-      )}
+      {!envs ? <Spinner /> : <p className="text-sm text-zinc-400">This project has no environments yet. Add one from the project page first.</p>}
     </Modal>
   )
 }
