@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Plan & decisions log — ready to start Phase 1** (see §13).
+Status: **Phase 1 built** — next is Phase 2 (Vault). See §13.
 
 ---
 
@@ -79,6 +79,8 @@ The same binary has two faces:
 |---|---|
 | `REXUS_COMPANY_NAME` | Company name shown in the UI. |
 | `REXUS_BASE_URL` | Public URL of the instance. |
+| `REXUS_PORT` | Port Rexus listens on (default `8080`). |
+| `POSTGRES_PASSWORD`, `POSTGRES_HOST_PORT` | `docker-compose.yml` only: bundled Postgres password and its localhost port. |
 | `DATABASE_URL` | Any Postgres connection string. |
 | `REXUS_MASTER_KEY` | Master encryption key for the vault. **Never stored in DB.** |
 | `REXUS_BACKUP_DIR` | Where backups are written — a path **outside** the app/server folder (local disk, external drive, pendrive). Needed only when `REXUS_BACKUP_ENABLED=true`. |
@@ -437,7 +439,9 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 Each phase ends with something **working and usable**. Phases are small so the AI can build and test them one at a time.
 
-### Phase 1 — Foundation + keepalive pings (first useful version)
+### Phase 1 — Foundation + keepalive pings (first useful version) ✅ built
+> Built Nov 2026. Notes: schedules are cron or `@every 10m` style with a 1-minute minimum; job request headers are encrypted with the master key; job run history is kept 30 days; IP allowlist is validated but only enforced from Phase 3.
+
 **Goal:** run Rexus, log in, add projects, and keep Supabase / APIs awake.
 - Go project skeleton, React UI embedded in the binary, `Dockerfile` + `docker-compose.yml` (Rexus + Postgres).
 - Env config + toggles (§3) with validation; `.env.example`.

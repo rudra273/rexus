@@ -3,15 +3,16 @@
 .env.*
 !.env.example
 
-# Encrypted database backups — never commit
+# Database backups — never commit
 backups/
 *.dump
 *.dump.enc
 
-# Build output
+# Build output (web/dist/.gitkeep stays so the Go embed always compiles)
 /bin/
 /dist/
-web/dist/
+web/dist/*
+!web/dist/.gitkeep
 node_modules/
 
 # OS / editor

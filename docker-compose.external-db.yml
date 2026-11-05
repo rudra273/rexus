@@ -1,0 +1,13 @@
+# Rexus only — connects to any Postgres you already have (Supabase, Neon,
+# RDS, a local install…). Set DATABASE_URL in .env, then:
+#
+#   docker compose -f docker-compose.external-db.yml up -d
+
+services:
+  rexus:
+    build: .
+    image: rexus:local
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"

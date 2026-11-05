@@ -1,0 +1,44 @@
+# Rexus + Postgres (default local setup).
+#
+#   cp .env.example .env      # then set REXUS_MASTER_KEY (rexus keygen)
+#   docker compose up -d
+#
+# To use your own / cloud Postgres instead, see docker-compose.external-db.yml.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rexus}
+      POSTGRES_DB: rexus
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Localhost only — lets `make dev-api` (Rexus outside Docker) reach it.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rexus -d rexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rexus:
+    build: .
+    image: rexus:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Points at the bundled Postgres; overrides DATABASE_URL from .env.
+      DATABASE_URL: postgres://rexus:${POSTGRES_PASSWORD:-rexus}@postgres:5432/rexus?sslmode=disable
+    ports:
+      - "${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"
+
+volumes:
+  pgdata:
