@@ -94,7 +94,7 @@ export function SettingsPage() {
           <Card className="divide-y divide-zinc-800">
             <Row label="Company" value={instance.company_name} />
             <Row label="Base URL" value={<span className="mono">{instance.base_url}</span>} />
-            <Row label="Version" value={<span className="mono">{instance.version}</span>} />
+            <Row label="Powered by" value={<span>Rexus <span className="mono text-zinc-500">{instance.version}</span></span>} />
             <Row
               label="Email (SMTP)"
               value={instance.smtp?.configured ? <span className="mono">{instance.smtp.host}</span> : <span className="text-zinc-500">not set up</span>}

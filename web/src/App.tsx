@@ -116,7 +116,6 @@ function Layout() {
           <img src="/favicon.svg" alt="" className="h-7 w-7" />
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</div>
-            <div className="text-[11px] text-zinc-500">Rexus</div>
           </div>
         </div>
         <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:pb-0">
