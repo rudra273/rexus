@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, canWrite, type Environment, type Project, type Scoped, type Service, type ServiceFilter } from '../api'
+import { api, isAdmin, type Environment, type Project, type Scoped, type Service, type ServiceFilter } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, ErrorBox, Field, Input, Modal, Select, StatusDot, Textarea, cx } from '../ui'
 
@@ -115,7 +115,7 @@ export function ScopeBar({ services, value, onChange }: { services: Service[]; v
 
 export function ProjectServices({ project, services, onChanged }: { project: Project; services: Service[]; onChanged: () => void }) {
   const { user } = useAuth()
-  const writable = !!user && canWrite(user.role)
+  const writable = !!user && isAdmin(user.role)
   const [form, setForm] = useState<{ existing?: Service } | null>(null)
   const [error, setError] = useState<string | null>(null)
 

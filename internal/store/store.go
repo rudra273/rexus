@@ -51,6 +51,7 @@ type AuditEntry struct {
 	TargetID    string
 	IP          string
 	Details     map[string]any
+	ProjectID   *string // the project the entry is about, if any (who may see it)
 }
 
 // Audit writes an audit-log entry. Failures are logged, never returned:
@@ -59,9 +60,9 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) {
 	if e.Details == nil {
 		e.Details = map[string]any{}
 	}
-	_, err := s.Pool.Exec(ctx, `INSERT INTO audit_log (actor_user_id, actor, action, target_type, target_id, ip, details)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7)`,
-		e.ActorUserID, e.Actor, e.Action, e.TargetType, e.TargetID, e.IP, e.Details)
+	_, err := s.Pool.Exec(ctx, `INSERT INTO audit_log (actor_user_id, actor, action, target_type, target_id, ip, details, project_id)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, $8)`,
+		e.ActorUserID, e.Actor, e.Action, e.TargetType, e.TargetID, e.IP, e.Details, e.ProjectID)
 	if err != nil {
 		slog.Error("audit log write failed", "action", e.Action, "err", err)
 	}

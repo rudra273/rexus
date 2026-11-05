@@ -74,7 +74,7 @@ A project can be split into **services** — e.g. `frontend`, `backend`, `worker
 - The same secret name can exist in the project and in each service (e.g. `DATABASE_URL` for both `backend` and `worker`). Nothing is inherited: a service doesn't see the project's own secrets automatically.
 - A service with secrets, jobs or checks can't be deleted — move or delete them first. **Move** on a secret keeps its versions and history.
 - A repository URL and root directory can be noted on a service, for reference only.
-- Services organize; they don't restrict access. Every role still sees the whole project.
+- Services organize; they don't restrict access. Anyone who can see the project sees all of its services.
 
 ## Health checks and the dashboard
 
@@ -244,9 +244,27 @@ Rexus is invite-only; there is no public signup. The owner and admins add people
 | | Owner | Admin | Contributor | Viewer |
 |---|:-:|:-:|:-:|:-:|
 | See dashboard, projects, secret names and expiry, job history | ✅ | ✅ | ✅ | ✅ |
-| Create/edit projects, secrets, jobs; reveal and copy secret values | ✅ | ✅ | ✅ | ❌ |
+| Work on secrets, jobs and checks; reveal and copy secret values | ✅ | ✅ | ✅ | ❌ |
+| Create, rename and delete projects; manage a project's environments and services | ✅ | ✅ | ❌ | ❌ |
 | Invite, disable, remove users; password-reset links; reset 2FA; audit log | ✅ | ✅ (only contributors and viewers) | ❌ | ❌ |
 | Manage admins; transfer ownership | ✅ | ❌ | ❌ | ❌ |
+
+### Which projects someone can see
+
+Roles say what a person can *do*; **project access** says which projects they can *see*. Whatever isn't shared with someone answers "not found" for them — in the lists, search, the dashboard, the audit log and the API.
+
+| | Sees |
+|---|---|
+| **Owner** | Every project, always — including ones an admin creates. |
+| **Admin** | **All projects** or **selected projects** (the owner chooses), plus any they create themselves. Never a project marked **Owner only**. |
+| **Contributor, Viewer** | Only the projects shared with them. |
+
+- Set it when you invite someone, or later with **Users → Access**. On a project's page, the **Access** section lists who can see it and lets you share it with people.
+- An admin can only share projects they can see, and only with contributors and viewers; the owner chooses what other admins see. When an admin edits someone's access, grants to projects the admin can't see are left as they are.
+- **Owner only** (project page, owner only) hides a project from every admin, even ones with access to all projects, unless it is shared with them by name.
+- API tokens never see more than the person who created them (checked on every request), and can be limited to chosen projects. Deploy tokens already belong to one project; creating one needs access to it.
+- Alerts go to the team's shared channels, and a backup contains every project (secrets stay encrypted) — neither is filtered by project.
+- Upgrading from an older version changes nothing anyone sees: existing admins get "all projects" and existing contributors and viewers keep every existing project until you trim them.
 
 - Role changes and disabling take effect on the very next request; disabling logs the person out immediately.
 - A **password-reset link** is one-time and expires in 24 hours; using it logs the user out everywhere. **Reset 2FA** forces them to enrol again at next login.

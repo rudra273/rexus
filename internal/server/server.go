@@ -200,6 +200,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{key}", s.authed(s.handleGetProject))
 	mux.HandleFunc("PATCH /api/projects/{key}", s.authed(s.handleUpdateProject))
 	mux.HandleFunc("DELETE /api/projects/{key}", s.authed(s.handleDeleteProject))
+	mux.HandleFunc("GET /api/projects/{key}/access", s.authed(s.handleGetProjectAccess))
+	mux.HandleFunc("PUT /api/projects/{key}/access", s.authed(s.handleSetProjectAccess))
 
 	// Services: optional groups inside a project (shared by every module)
 	mux.HandleFunc("GET /api/projects/{key}/services", s.authed(s.handleListServices))

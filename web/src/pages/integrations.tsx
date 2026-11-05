@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, type ApiToken } from '../api'
 import { DeployTokensOverview, HistoryButton, useTokenHistory } from './deploy_tokens'
+import { ProjectPicker, useVisibleProjects } from './access'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, cx, fmtTime, timeAgo } from '../ui'
 
 const STATUS_TONE = { active: 'green', expired: 'amber', revoked: 'zinc' } as const
@@ -96,6 +97,7 @@ export function IntegrationsPage() {
                 <tr>
                   <th className="px-4 py-2.5 font-medium">Token</th>
                   <th className="px-4 py-2.5 font-medium">Role</th>
+                  <th className="px-4 py-2.5 font-medium">Projects</th>
                   <th className="px-4 py-2.5 font-medium">Last used</th>
                   <th className="px-4 py-2.5 font-medium">Expires</th>
                   <th className="px-4 py-2.5 font-medium">Status</th>
@@ -112,6 +114,9 @@ export function IntegrationsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-2.5"><Badge tone={t.role === 'contributor' ? 'amber' : 'sky'}>{t.role}</Badge></td>
+                    <td className="px-4 py-2.5 text-xs text-zinc-400" title={t.allowed_projects.join(', ')}>
+                      {t.all_projects ? 'all they can see' : t.allowed_projects.length ? t.allowed_projects.slice(0, 2).join(', ') + (t.allowed_projects.length > 2 ? ` +${t.allowed_projects.length - 2}` : '') : '—'}
+                    </td>
                     <td className="px-4 py-2.5 text-zinc-400" title={fmtTime(t.last_used_at)}>
                       {t.last_used_at ? (
                         <>
@@ -165,17 +170,24 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [name, setName] = useState('')
   const [role, setRole] = useState<'viewer' | 'contributor'>('viewer')
   const [expiry, setExpiry] = useState('90')
+  const projects = useVisibleProjects()
+  const [limit, setLimit] = useState(false)
+  const [keys, setKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (limit && keys.length === 0) {
+      setError('Choose at least one project, or switch to “All projects I can see”.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
       const r = await api<{ token: string; meta: ApiToken }>('/api/tokens', {
         method: 'POST',
-        body: { name, role, expires_in_days: expiry === 'never' ? null : Number(expiry) },
+        body: { name, role, expires_in_days: expiry === 'never' ? null : Number(expiry), projects: limit ? keys : undefined },
       })
       onCreated(r)
     } catch (err) {
@@ -203,6 +215,15 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
             <option value="viewer">Viewer (recommended)</option>
             <option value="contributor">Contributor (can read secret values)</option>
           </Select>
+        </Field>
+        <Field label="Projects" hint="A token never sees more than you can see yourself.">
+          <div className="space-y-2">
+            <Select value={limit ? 'some' : 'all'} onChange={(e) => setLimit(e.target.value === 'some')}>
+              <option value="all">All projects I can see</option>
+              <option value="some">Only selected projects</option>
+            </Select>
+            {limit && (!projects ? <Spinner /> : <ProjectPicker projects={projects} value={keys} onChange={setKeys} />)}
+          </div>
         </Field>
         <Field label="Expires" hint="Short-lived tokens limit the damage if one leaks.">
           <Select value={expiry} onChange={(e) => setExpiry(e.target.value)}>

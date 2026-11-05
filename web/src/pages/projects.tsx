@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, canWrite, type HealthCheck, type Job, type Project, type Secret } from '../api'
+import { api, canWrite, isAdmin, type HealthCheck, type Job, type Project, type Secret } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo, type DotStatus } from '../ui'
 import { JobTable } from './jobs'
@@ -8,6 +8,7 @@ import { degradedReason, ProjectChecks } from './health'
 import { ExpiryBadge, ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 import { ProjectDeployTokens } from './deploy_tokens'
+import { ProjectAccess } from './access'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -107,7 +108,7 @@ export function DashboardPage() {
       <PageHeader
         title="Dashboard"
         subtitle={`${projects.length} project${projects.length === 1 ? '' : 's'} · ${active.length} health check${active.length === 1 ? '' : 's'}`}
-        actions={user && canWrite(user.role) && <Link to="/projects/new"><Button>New project</Button></Link>}
+        actions={user && isAdmin(user.role) && <Link to="/projects/new"><Button>New project</Button></Link>}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -261,6 +262,7 @@ export function ProjectDetailPage() {
   // '' = all services, '-' = the project directly, otherwise a service ID.
   const [scope, setScope] = useState('')
   const writable = !!user && canWrite(user.role)
+  const admin = !!user && isAdmin(user.role) // project settings, structure and access are owner/admin only
   const { services, reload: reloadServices } = useServices(key)
 
   const load = useCallback(async () => {
@@ -302,9 +304,9 @@ export function ProjectDetailPage() {
     <>
       <PageHeader
         title={project.name}
-        subtitle={<span className="mono">{project.key}</span>}
+        subtitle={<span className="mono">{project.key}{project.owner_only && <span className="ml-2 rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}</span>}
         actions={
-          writable && !editing && (
+          admin && !editing && (
             <>
               <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
               <Button variant="danger" onClick={remove}>Delete</Button>
@@ -342,6 +344,8 @@ export function ProjectDetailPage() {
       {meta?.modules.vault && <ProjectVault project={project} services={services} scope={scope} onChanged={reloadServices} />}
 
       {meta?.modules.vault && <ProjectDeployTokens project={project} services={services} writable={writable} />}
+
+      {admin && <ProjectAccess project={project} onChanged={load} />}
 
       {meta?.modules.scheduler && (
         <section className="mt-8">

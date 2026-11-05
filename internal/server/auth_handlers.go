@@ -84,6 +84,7 @@ func (s *Server) authed(h authHandler) http.HandlerFunc {
 		if time.Since(a.sess.LastSeenAt) > touchThreshold {
 			s.store.TouchSession(r.Context(), a.sess.ID, time.Now().Add(sessionTTL))
 		}
+		r = withReqState(r, a)
 		// Only the owner sees the owner's email; for everyone else it is masked.
 		if a.user.Role != "owner" {
 			owner, err := s.store.Owner(r.Context())
@@ -102,6 +103,25 @@ func (s *Server) authed(h authHandler) http.HandlerFunc {
 
 func (s *Server) audit(r *http.Request, a *authCtx, action, targetType, targetID string, details map[string]any) {
 	e := store.AuditEntry{Action: action, TargetType: targetType, TargetID: targetID, IP: clientIP(r), Details: details}
+	// Which project the entry is about decides who may read it in the audit log.
+	if pid := stateOf(r).project; pid != "" {
+		e.ProjectID = &pid
+	} else if targetType == "project" && store.IsUUID(targetID) {
+		e.ProjectID = &targetID
+	}
+	if a != nil {
+		e.ActorUserID = &a.user.ID
+		e.Actor = a.user.Email
+	} else {
+		e.Actor = "anonymous"
+	}
+	s.store.Audit(r.Context(), e)
+}
+
+// auditProject writes an audit entry that belongs to one specific project (so it is
+// only shown to people who can see that project), whatever the request touched.
+func (s *Server) auditProject(r *http.Request, a *authCtx, projectID, action, targetType, targetID string, details map[string]any) {
+	e := store.AuditEntry{Action: action, TargetType: targetType, TargetID: targetID, IP: clientIP(r), Details: details, ProjectID: &projectID}
 	if a != nil {
 		e.ActorUserID = &a.user.ID
 		e.Actor = a.user.Email

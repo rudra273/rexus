@@ -313,7 +313,7 @@ func (s *Server) handleAlertHistory(w http.ResponseWriter, r *http.Request, a *a
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 200 {
 		limit = v
 	}
-	recs, err := s.store.ListAlertRecords(r.Context(), limit)
+	recs, err := s.store.ListAlertRecords(r.Context(), limit, s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return

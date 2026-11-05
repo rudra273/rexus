@@ -99,10 +99,42 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, a *auth
 		s.internalError(w, r, err)
 		return
 	}
+	grants, err := s.store.GrantsByUser(r.Context(), s.access(r))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users":            users,
+		"grants":           grants, // user ID → keys of the projects shared with them (only ones you can see)
 		"assignable_roles": assignableRoles(a.user.Role),
 	})
+}
+
+// projectIDsFor turns project keys into IDs, refusing any the actor can't see —
+// nobody can hand out access to a project they don't have themselves.
+func (s *Server) projectIDsFor(w http.ResponseWriter, r *http.Request, keys []string) ([]string, bool) {
+	ids, ok, err := s.store.ProjectIDsByKeys(r.Context(), keys)
+	if err != nil {
+		s.internalError(w, r, err)
+		return nil, false
+	}
+	if !ok {
+		writeError(w, http.StatusBadRequest, "one of the projects doesn't exist")
+		return nil, false
+	}
+	for _, id := range ids {
+		can, err := s.store.CanSee(r.Context(), s.access(r), id)
+		if err != nil {
+			s.internalError(w, r, err)
+			return nil, false
+		}
+		if !can {
+			writeError(w, http.StatusBadRequest, "one of the projects doesn't exist")
+			return nil, false
+		}
+	}
+	return ids, true
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *authCtx) {
@@ -116,13 +148,43 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 	var in struct {
 		Role   *string `json:"role"`
 		Status *string `json:"status"`
+		// Project access: AllProjects is for admins (owner sets it); Projects are the keys shared
+		// with the user — within what you can see; grants to projects you can't see stay as they are.
+		AllProjects *bool     `json:"all_projects"`
+		Projects    *[]string `json:"projects"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if in.Role == nil && in.Status == nil {
+	if in.Role == nil && in.Status == nil && in.AllProjects == nil && in.Projects == nil {
 		writeError(w, http.StatusBadRequest, "nothing to change")
 		return
+	}
+	// Validate the access change up front, so nothing is half-applied.
+	targetRole := u.Role
+	if in.Role != nil {
+		targetRole = *in.Role
+	}
+	if in.AllProjects != nil {
+		if a.user.Role != "owner" {
+			writeError(w, http.StatusForbidden, "only the owner can give an admin access to all projects")
+			return
+		}
+		if *in.AllProjects && targetRole != "admin" {
+			writeError(w, http.StatusBadRequest, "only admins can have access to all projects")
+			return
+		}
+	}
+	var grantIDs []string
+	if in.Projects != nil {
+		if targetRole == "admin" && a.user.Role != "owner" {
+			writeError(w, http.StatusForbidden, "only the owner can choose which projects an admin sees")
+			return
+		}
+		var ok bool
+		if grantIDs, ok = s.projectIDsFor(w, r, *in.Projects); !ok {
+			return
+		}
 	}
 	if in.Role != nil && *in.Role != u.Role {
 		if !roleAssignable(a.user.Role, *in.Role) {
@@ -154,6 +216,50 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 			}
 		}
 		s.audit(r, a, action, "user", u.ID, map[string]any{"email": u.Email})
+	}
+	if in.AllProjects != nil {
+		if err := s.store.SetAllProjects(r.Context(), u.ID, *in.AllProjects); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		s.audit(r, a, "user.access", "user", u.ID, map[string]any{"email": u.Email, "all_projects": *in.AllProjects})
+	}
+	if in.Projects != nil {
+		scope, err := s.store.VisibleProjectIDs(r.Context(), s.access(r))
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		before, err := s.store.UserGrantIDs(r.Context(), u.ID)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if err := s.store.SetUserGrants(r.Context(), u.ID, grantIDs, scope, a.user.ID); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		// One entry per project, each tied to that project: people only read the
+		// history of projects they can see (so a hidden project's name never leaks).
+		inSet := func(list []string) map[string]bool {
+			m := map[string]bool{}
+			for _, x := range list {
+				m[x] = true
+			}
+			return m
+		}
+		was, now, inScope := inSet(before), inSet(grantIDs), inSet(scope)
+		keys, _ := s.store.ProjectKeysByIDs(r.Context(), append(append([]string{}, before...), grantIDs...))
+		for id := range now {
+			if !was[id] {
+				s.auditProject(r, a, id, "user.access_grant", "user", u.ID, map[string]any{"email": u.Email, "project": keys[id]})
+			}
+		}
+		for id := range was {
+			if inScope[id] && !now[id] {
+				s.auditProject(r, a, id, "user.access_revoke", "user", u.ID, map[string]any{"email": u.Email, "project": keys[id]})
+			}
+		}
 	}
 	updated, err := s.store.UserByID(r.Context(), u.ID)
 	if err != nil {
@@ -239,7 +345,7 @@ func (s *Server) handleListInvites(w http.ResponseWriter, r *http.Request, a *au
 	if !requireAdmin(w, a) {
 		return
 	}
-	invites, err := s.store.ListInvites(r.Context())
+	invites, err := s.store.ListInvites(r.Context(), s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -254,6 +360,9 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 	var in struct {
 		Email string `json:"email"`
 		Role  string `json:"role"`
+		// What the new user will see once they join (see handleUpdateUser).
+		AllProjects bool     `json:"all_projects"`
+		Projects    []string `json:"projects"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -267,8 +376,23 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 		writeError(w, http.StatusForbidden, "you can't invite someone as "+strconv.Quote(in.Role))
 		return
 	}
+	if in.AllProjects && (in.Role != "admin" || a.user.Role != "owner") {
+		writeError(w, http.StatusBadRequest, "only the owner can invite an admin with access to all projects")
+		return
+	}
+	if len(in.Projects) > 0 && in.Role == "admin" && a.user.Role != "owner" {
+		writeError(w, http.StatusForbidden, "only the owner can choose which projects an admin sees")
+		return
+	}
+	projectIDs := []string{}
+	if len(in.Projects) > 0 {
+		var ok bool
+		if projectIDs, ok = s.projectIDsFor(w, r, in.Projects); !ok {
+			return
+		}
+	}
 	token := crypto.RandomToken(32)
-	inv, err := s.store.CreateInvite(r.Context(), email, in.Role, crypto.HashToken(token), a.user.ID, time.Now().Add(inviteTTL))
+	inv, err := s.store.CreateInvite(r.Context(), email, in.Role, crypto.HashToken(token), a.user.ID, time.Now().Add(inviteTTL), in.AllProjects, projectIDs)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, "a user with this email already exists")
 		return
@@ -277,7 +401,11 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "user.invite", "invite", inv.ID, map[string]any{"email": inv.Email, "role": inv.Role})
+	s.audit(r, a, "user.invite", "invite", inv.ID, map[string]any{"email": inv.Email, "role": inv.Role, "all_projects": in.AllProjects, "project_count": len(projectIDs)})
+	keys, _ := s.store.ProjectKeysByIDs(r.Context(), projectIDs)
+	for _, id := range projectIDs {
+		s.auditProject(r, a, id, "user.invite_access", "invite", inv.ID, map[string]any{"email": inv.Email, "project": keys[id]})
+	}
 	// The link is shown once — only its hash is stored. Re-invite for a new one.
 	link := s.cfg.BaseURL + "/invite/" + token
 	resp := map[string]any{"invite": inv, "link": link, "emailed": false}
@@ -581,7 +709,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, a *authCtx)
 		}
 		before = n
 	}
-	rows, err := s.store.ListAudit(r.Context(), strings.TrimSpace(q.Get("q")), before, limit)
+	rows, err := s.store.ListAudit(r.Context(), strings.TrimSpace(q.Get("q")), before, limit, s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return

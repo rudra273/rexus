@@ -194,8 +194,13 @@ func aggregateStatus(checks []*store.HealthCheck) string {
 	return out
 }
 
-func (s *Server) v1Project(w http.ResponseWriter, r *http.Request) (*store.Project, bool) {
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
+func (s *Server) v1Project(w http.ResponseWriter, r *http.Request, t *store.APIToken) (*store.Project, bool) {
+	acc, err := s.tokenAccess(r, t)
+	if err != nil {
+		s.internalError(w, r, err)
+		return nil, false
+	}
+	p, err := s.store.ProjectByKeyFor(r.Context(), acc, r.PathValue("key"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "project not found (project keys can be renamed — use the current key)")
 		return nil, false
@@ -248,6 +253,11 @@ func (s *Server) v1Jobs(r *http.Request, p *store.Project, svc, env store.ScopeF
 }
 
 func (s *Server) v1Secrets(r *http.Request, f store.SecretFilter, t *store.APIToken) ([]secretV1, error) {
+	acc, err := s.tokenAccess(r, t)
+	if err != nil {
+		return nil, err
+	}
+	f.Access = acc
 	secrets, err := s.store.ListSecrets(r.Context(), f)
 	if err != nil {
 		return nil, err
@@ -272,7 +282,12 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request, t *store
 }
 
 func (s *Server) handleV1Projects(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
-	projects, err := s.store.ListProjects(r.Context())
+	acc, err := s.tokenAccess(r, t)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	projects, err := s.store.ListProjectsFor(r.Context(), acc)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -286,7 +301,7 @@ func (s *Server) handleV1Projects(w http.ResponseWriter, r *http.Request, t *sto
 
 // handleV1Project is the full picture of one project: checks, jobs and expiring secrets.
 func (s *Server) handleV1Project(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}
@@ -328,7 +343,7 @@ func (s *Server) handleV1Project(w http.ResponseWriter, r *http.Request, t *stor
 // handleV1Status is the compact answer a CRM wants: is this client's project OK?
 // ?service= and ?environment= narrow it to part of the project.
 func (s *Server) handleV1Status(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}
@@ -393,7 +408,7 @@ func (s *Server) handleV1Status(w http.ResponseWriter, r *http.Request, t *store
 }
 
 func (s *Server) handleV1Checks(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}
@@ -413,7 +428,7 @@ func (s *Server) handleV1Jobs(w http.ResponseWriter, r *http.Request, t *store.A
 	if !s.v1NeedScheduler(w) {
 		return
 	}
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}
@@ -433,7 +448,7 @@ func (s *Server) handleV1ProjectSecrets(w http.ResponseWriter, r *http.Request, 
 	if !s.v1NeedVault(w) {
 		return
 	}
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}
@@ -481,7 +496,7 @@ func (s *Server) handleV1Expiring(w http.ResponseWriter, r *http.Request, t *sto
 // v1Secret looks a secret up in exactly one scope: .../secrets/{env}/{name}
 // is a secret of the project itself, .../services/{service}/secrets/{env}/{name}
 // one of that service. Same-named secrets in other scopes are never returned.
-func (s *Server) v1Secret(w http.ResponseWriter, r *http.Request) (*store.Secret, bool) {
+func (s *Server) v1Secret(w http.ResponseWriter, r *http.Request, t *store.APIToken) (*store.Secret, bool) {
 	sec, err := s.store.SecretByName(r.Context(), r.PathValue("key"), r.PathValue("service"), r.PathValue("env"), r.PathValue("name"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "secret not found")
@@ -491,6 +506,19 @@ func (s *Server) v1Secret(w http.ResponseWriter, r *http.Request) (*store.Secret
 		s.internalError(w, r, err)
 		return nil, false
 	}
+	// A secret of a project this token can't see is "not found", like any other.
+	acc, err := s.tokenAccess(r, t)
+	if err != nil {
+		s.internalError(w, r, err)
+		return nil, false
+	}
+	if ok, err := s.store.CanSee(r.Context(), acc, sec.ProjectID); err != nil {
+		s.internalError(w, r, err)
+		return nil, false
+	} else if !ok {
+		writeError(w, http.StatusNotFound, "secret not found")
+		return nil, false
+	}
 	return sec, true
 }
 
@@ -498,7 +526,7 @@ func (s *Server) handleV1Secret(w http.ResponseWriter, r *http.Request, t *store
 	if !s.v1NeedVault(w) {
 		return
 	}
-	sec, ok := s.v1Secret(w, r)
+	sec, ok := s.v1Secret(w, r, t)
 	if !ok {
 		return
 	}
@@ -515,7 +543,7 @@ func (s *Server) handleV1Reveal(w http.ResponseWriter, r *http.Request, t *store
 		writeError(w, http.StatusForbidden, "this token is read-only (viewer) and can't read secret values — use a contributor token")
 		return
 	}
-	sec, ok := s.v1Secret(w, r)
+	sec, ok := s.v1Secret(w, r, t)
 	if !ok {
 		return
 	}
@@ -535,7 +563,7 @@ func (s *Server) handleV1Reveal(w http.ResponseWriter, r *http.Request, t *store
 }
 
 func (s *Server) handleV1Services(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
-	p, ok := s.v1Project(w, r)
+	p, ok := s.v1Project(w, r, t)
 	if !ok {
 		return
 	}

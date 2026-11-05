@@ -77,6 +77,7 @@ type JobFilter struct {
 	ProjectID   string
 	Service     ScopeFilter
 	Environment ScopeFilter
+	Access      Access // which projects the caller may see
 }
 
 func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]*Job, error) {
@@ -86,6 +87,7 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]*Job, error) {
 	}
 	b.scope("j.service_id", f.Service)
 	b.scope("j.environment_id", f.Environment)
+	b.access("j.project_id", f.Access)
 	q := jobSelect + b.sql() + ` ORDER BY p.name, sv.name NULLS FIRST, j.name`
 	rows, err := s.Pool.Query(ctx, q, b.args...)
 	if err != nil {

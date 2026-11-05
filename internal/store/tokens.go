@@ -29,6 +29,13 @@ type APIToken struct {
 	RevokedAt  *time.Time `json:"revoked_at"`
 	Status     string     `json:"status"` // active | expired | revoked
 
+	// Who it acts for: an API token never sees more than its creator (nil creator = nothing).
+	CreatorID   *string `json:"-"`
+	CreatorRole *string `json:"-"`
+	// API tokens: every project the creator can see (true), or only AllowedProjects.
+	AllProjects     bool     `json:"all_projects"`
+	AllowedProjects []string `json:"allowed_projects"` // keys; only the ones the viewer of the list can see
+
 	// Scope — deploy tokens only.
 	ProjectID       *string `json:"-"`
 	ServiceID       *string `json:"-"`
@@ -43,7 +50,10 @@ const tokenSelect = `SELECT t.id, t.kind, t.name, t.prefix, t.role, u.email, t.c
 	CASE WHEN t.revoked_at IS NOT NULL THEN 'revoked'
 	     WHEN t.expires_at IS NOT NULL AND t.expires_at <= now() THEN 'expired'
 	     ELSE 'active' END,
-	t.project_id, t.service_id, t.environment_id, p.key, p.name, sv.key, en.name
+	t.project_id, t.service_id, t.environment_id, p.key, p.name, sv.key, en.name,
+	t.created_by, u.role, t.all_projects,
+	COALESCE((SELECT array_agg(ap.key ORDER BY ap.key) FROM api_token_projects tp JOIN projects ap ON ap.id = tp.project_id
+		WHERE tp.token_id = t.id), '{}')
 	FROM api_tokens t
 	LEFT JOIN users u ON u.id = t.created_by
 	LEFT JOIN projects p ON p.id = t.project_id
@@ -54,20 +64,55 @@ func scanToken(row interface{ Scan(...any) error }) (*APIToken, error) {
 	t := &APIToken{}
 	if err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.Prefix, &t.Role, &t.CreatedBy, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt,
 		&t.LastUsedIP, &t.RevokedAt, &t.Status,
-		&t.ProjectID, &t.ServiceID, &t.EnvironmentID, &t.ProjectKey, &t.ProjectName, &t.ServiceKey, &t.EnvironmentName); err != nil {
+		&t.ProjectID, &t.ServiceID, &t.EnvironmentID, &t.ProjectKey, &t.ProjectName, &t.ServiceKey, &t.EnvironmentName,
+		&t.CreatorID, &t.CreatorRole, &t.AllProjects, &t.AllowedProjects); err != nil {
 		return nil, notFound(err)
 	}
 	return t, nil
 }
 
-func (s *Store) CreateToken(ctx context.Context, name, prefix, role string, tokenHash []byte, createdBy string, expires *time.Time) (*APIToken, error) {
-	var id string
-	err := s.Pool.QueryRow(ctx, `INSERT INTO api_tokens (name, prefix, role, token_hash, created_by, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, name, prefix, role, tokenHash, createdBy, expires).Scan(&id)
+// CreateToken makes an API token. projectIDs nil = every project its creator can see;
+// otherwise the token is limited to those projects (still within what the creator sees).
+func (s *Store) CreateToken(ctx context.Context, name, prefix, role string, tokenHash []byte, createdBy string, expires *time.Time, projectIDs []string) (*APIToken, error) {
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx, `INSERT INTO api_tokens (name, prefix, role, token_hash, created_by, expires_at, all_projects)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, name, prefix, role, tokenHash, createdBy, expires, projectIDs == nil).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	if len(projectIDs) > 0 {
+		if _, err := tx.Exec(ctx, `INSERT INTO api_token_projects (token_id, project_id)
+			SELECT $1::uuid, p FROM unnest($2::uuid[]) p`, id, projectIDs); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
 	return scanToken(s.Pool.QueryRow(ctx, tokenSelect+` WHERE t.id = $1`, id))
+}
+
+// TokenProjectIDs lists the projects an API token is limited to (see AllProjects).
+func (s *Store) TokenProjectIDs(ctx context.Context, tokenID string) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT project_id FROM api_token_projects WHERE token_id = $1`, tokenID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // CreateDeployToken makes a token scoped to one project and environment, and
@@ -84,13 +129,18 @@ func (s *Store) CreateDeployToken(ctx context.Context, name, prefix string, toke
 }
 
 // ListTokens lists tokens of one kind, newest first. projectID "" = all projects.
-func (s *Store) ListTokens(ctx context.Context, kind, projectID string) ([]*APIToken, error) {
-	q, args := tokenSelect+` WHERE t.kind = $1`, []any{kind}
+// Deploy tokens are only listed for projects a may see; for API tokens, the
+// projects each is limited to are only the ones a may see.
+func (s *Store) ListTokens(ctx context.Context, kind, projectID string, a Access) ([]*APIToken, error) {
+	var b filterBuilder
+	b.add("t.kind = ?", kind)
 	if projectID != "" {
-		q += ` AND t.project_id = $2`
-		args = append(args, projectID)
+		b.add("t.project_id = ?", projectID)
 	}
-	rows, err := s.Pool.Query(ctx, q+` ORDER BY t.created_at DESC`, args...)
+	if kind == TokenKindDeploy {
+		b.access("t.project_id", a)
+	}
+	rows, err := s.Pool.Query(ctx, tokenSelect+b.sql()+` ORDER BY t.created_at DESC`, b.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +152,46 @@ func (s *Store) ListTokens(ctx context.Context, kind, projectID string) ([]*APIT
 			return nil, err
 		}
 		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Don't reveal the keys of projects the viewer can't see.
+	if kind == TokenKindAPI && a.Viewer != "" {
+		visible, err := s.VisibleProjectIDs(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		keys, err := s.projectKeysByID(ctx, visible)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range out {
+			kept := []string{}
+			for _, k := range t.AllowedProjects {
+				if keys[k] {
+					kept = append(kept, k)
+				}
+			}
+			t.AllowedProjects = kept
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) projectKeysByID(ctx context.Context, ids []string) (map[string]bool, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT key FROM projects WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
 	}
 	return out, rows.Err()
 }

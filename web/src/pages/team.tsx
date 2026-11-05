@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type AuditRow, type Invite, type Role, type SessionResp, type User } from '../api'
 import { useAuth } from '../auth'
+import { AccessChoice, UserAccessModal, useVisibleProjects } from './access'
 import { AuthShell, Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, fmtTime, timeAgo } from '../ui'
 
 const roleTone = { owner: 'green', admin: 'sky', contributor: 'zinc', viewer: 'zinc' } as const
@@ -10,6 +11,15 @@ function canManageUser(actor: User, target: User) {
   if (actor.id === target.id || target.role === 'owner') return false
   if (actor.role === 'owner') return true
   return actor.role === 'admin' && (target.role === 'contributor' || target.role === 'viewer')
+}
+
+/** What a user can see, in one cell of the Users table. */
+function ProjectsCell({ u, keys }: { u: User; keys: string[] }) {
+  if (u.role === 'owner') return <span className="text-xs text-zinc-400">all projects</span>
+  if (u.role === 'admin' && u.all_projects) return <span className="text-xs text-zinc-400">all projects</span>
+  if (keys.length === 0) return <span className="text-xs text-amber-400">{u.role === 'admin' ? 'only ones they create' : 'none'}</span>
+  const shown = keys.slice(0, 2).join(', ')
+  return <span className="text-xs text-zinc-400" title={keys.join(', ')}>{shown}{keys.length > 2 ? ` +${keys.length - 2}` : ''}</span>
 }
 
 // ───────────────────────── users page ─────────────────────────
@@ -32,6 +42,8 @@ export function UsersPage() {
   const [users, setUsers] = useState<User[] | null>(null)
   const [roles, setRoles] = useState<Role[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
+  const [grants, setGrants] = useState<Record<string, string[]>>({})
+  const [editingAccess, setEditingAccess] = useState<User | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [inviting, setInviting] = useState(false)
   const [linkInfo, setLinkInfo] = useState<LinkInfo | null>(null)
@@ -39,10 +51,11 @@ export function UsersPage() {
   const load = useCallback(async () => {
     try {
       const [u, i] = await Promise.all([
-        api<{ users: User[]; assignable_roles: Role[] }>('/api/users'),
+        api<{ users: User[]; grants: Record<string, string[]>; assignable_roles: Role[] }>('/api/users'),
         api<{ invites: Invite[] }>('/api/invites'),
       ])
       setUsers(u.users)
+      setGrants(u.grants ?? {})
       setRoles(u.assignable_roles)
       setInvites(i.invites)
     } catch (e) {
@@ -113,6 +126,7 @@ export function UsersPage() {
             <tr>
               <th className="px-4 py-2.5 font-medium">User</th>
               <th className="px-4 py-2.5 font-medium">Role</th>
+              <th className="px-4 py-2.5 font-medium">Projects</th>
               <th className="px-4 py-2.5 font-medium">2FA</th>
               <th className="px-4 py-2.5 font-medium">Last login</th>
               <th className="px-4 py-2.5 font-medium text-right">Actions</th>
@@ -138,6 +152,7 @@ export function UsersPage() {
                       <Badge tone={roleTone[u.role]}>{u.role}</Badge>
                     )}
                   </td>
+                  <td className="px-4 py-2.5"><ProjectsCell u={u} keys={grants[u.id] ?? []} /></td>
                   <td className="px-4 py-2.5">{u.totp_enabled ? <Badge tone="green">on</Badge> : <Badge tone="amber">off</Badge>}</td>
                   <td className="px-4 py-2.5 text-zinc-400" title={fmtTime(u.last_login_at)}>
                     {u.status === 'disabled' ? <Badge tone="red">disabled</Badge> : u.last_login_at ? timeAgo(u.last_login_at) : 'never'}
@@ -145,6 +160,7 @@ export function UsersPage() {
                   <td className="px-4 py-2.5">
                     {manage && (
                       <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
+                        <button className={link} onClick={() => setEditingAccess(u)}>Access</button>
                         <button className={link} onClick={() => resetLink(u)}>Reset password</button>
                         {u.totp_enabled && <button className={link} onClick={() => reset2FA(u)}>Reset 2FA</button>}
                         {u.status === 'active' ? (
@@ -175,6 +191,7 @@ export function UsersPage() {
                   <tr key={i.id}>
                     <td className="px-4 py-2.5 text-zinc-100">{i.email}</td>
                     <td className="px-4 py-2.5"><Badge tone={roleTone[i.role]}>{i.role}</Badge></td>
+                    <td className="px-4 py-2.5 text-xs text-zinc-400">{i.all_projects ? 'all projects' : i.projects.length ? i.projects.join(', ') : <span className="text-amber-400">no projects yet</span>}</td>
                     <td className="px-4 py-2.5 text-xs text-zinc-500">invited by {i.invited_by ?? 'someone'} · expires {timeAgo(i.expires_at)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-3">
@@ -195,10 +212,23 @@ export function UsersPage() {
       {inviting && (
         <InviteModal
           roles={roles}
+          meRole={me.role}
           onClose={() => setInviting(false)}
           onCreated={(email, l, extra) => {
             setInviting(false)
             setLinkInfo({ title: `Invite link for ${email}`, link: l, note: 'Send this link to them (chat, email…). It works once and expires in 7 days. It is shown only now.' + extra })
+            load()
+          }}
+        />
+      )}
+      {editingAccess && (
+        <UserAccessModal
+          user={editingAccess}
+          me={me}
+          grants={grants[editingAccess.id] ?? []}
+          onClose={() => setEditingAccess(null)}
+          onSaved={() => {
+            setEditingAccess(null)
             load()
           }}
         />
@@ -208,7 +238,10 @@ export function UsersPage() {
   )
 }
 
-function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: () => void; onCreated: (email: string, link: string, extra: string) => void }) {
+function InviteModal({ roles, meRole, onClose, onCreated }: { roles: Role[]; meRole: Role; onClose: () => void; onCreated: (email: string, link: string, extra: string) => void }) {
+  const projects = useVisibleProjects()
+  const [allProjects, setAllProjects] = useState(meRole === 'owner')
+  const [keys, setKeys] = useState<string[]>([])
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<string>(roles.includes('contributor') ? 'contributor' : (roles[0] ?? ''))
   const [error, setError] = useState<string | null>(null)
@@ -219,7 +252,10 @@ function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: ()
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ link: string; emailed?: boolean; email_error?: string }>('/api/invites', { method: 'POST', body: { email, role } })
+      const r = await api<{ link: string; emailed?: boolean; email_error?: string }>('/api/invites', {
+        method: 'POST',
+        body: { email, role, all_projects: role === 'admin' && meRole === 'owner' && allProjects, projects: role === 'admin' && allProjects ? [] : keys },
+      })
       onCreated(email, r.link, emailNote(r, email))
     } catch (err) {
       setError((err as Error).message)
@@ -244,6 +280,13 @@ function InviteModal({ roles, onClose, onCreated }: { roles: Role[]; onClose: ()
           <Select value={role} onChange={(e) => setRole(e.target.value)}>
             {roles.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
+        </Field>
+        <Field label="Projects they can see" hint="They only see these. You can change it later with the Access button.">
+          {!projects ? (
+            <Spinner />
+          ) : (
+            <AccessChoice role={role} canSetAll={meRole === 'owner'} projects={projects} allProjects={allProjects} keys={keys} onChange={(a, k) => { setAllProjects(a); setKeys(k) }} />
+          )}
         </Field>
         <p className="text-xs text-zinc-500">They'll set their own password and two-factor authentication from the link. If email is set up on the server it is emailed to them too; otherwise you share the link yourself.</p>
         <ErrorBox error={error} />

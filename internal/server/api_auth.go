@@ -199,7 +199,16 @@ func (s *Server) auditToken(r *http.Request, t *store.APIToken, action, targetTy
 	}
 	details["token_id"] = t.ID
 	details["role"] = t.Role
-	s.store.Audit(r.Context(), store.AuditEntry{
+	e := store.AuditEntry{
 		Actor: "token:" + t.Name, Action: action, TargetType: targetType, TargetID: targetID, IP: clientIP(r), Details: details,
-	})
+	}
+	// Entries about a project are only shown to people who can see that project.
+	if key, _ := details["project"].(string); key != "" {
+		if ids, ok, err := s.store.ProjectIDsByKeys(r.Context(), []string{key}); err == nil && ok && len(ids) == 1 {
+			e.ProjectID = &ids[0]
+		}
+	} else if t.ProjectID != nil {
+		e.ProjectID = t.ProjectID
+	}
+	s.store.Audit(r.Context(), e)
 }

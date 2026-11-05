@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api, canWrite, type Environment, type Project, type Secret, type SecretVersion, type Service, type ServiceFilter } from '../api'
+import { api, canWrite, isAdmin, type Environment, type Project, type Secret, type SecretVersion, type Service, type ServiceFilter } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 import { ServiceBadge, ServiceSelect, serviceQuery, useServices } from './services'
@@ -19,6 +19,7 @@ export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'd
 export function ProjectVault({ project, services, scope, onChanged }: { project: Project; services: Service[]; scope: ServiceFilter; onChanged: () => void }) {
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
+  const admin = !!user && isAdmin(user.role) // adding, renaming and deleting environments
   const [envs, setEnvs] = useState<Environment[] | null>(null)
   const [envId, setEnvId] = useState('')
   const [secrets, setSecrets] = useState<Secret[] | null>(null)
@@ -128,7 +129,7 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
                 {e.name} <span className="ml-1 text-xs text-zinc-500">{e.secret_count}</span>
               </button>
             ))}
-            {writable &&
+            {admin &&
               (addingEnv ? (
                 <form onSubmit={addEnv} className="flex items-center gap-1.5">
                   <div className="w-36">
@@ -140,7 +141,7 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
               ) : (
                 <button onClick={() => setAddingEnv(true)} className="px-2 text-sm text-emerald-400 hover:text-emerald-300">+ Environment</button>
               ))}
-            {writable && active && (
+            {admin && active && (
               <span className="ml-auto flex gap-3 text-xs text-zinc-500">
                 <button onClick={renameEnv} className="hover:text-zinc-200">Rename</button>
                 <button onClick={deleteEnv} className="hover:text-red-400">Delete</button>

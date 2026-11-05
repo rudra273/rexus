@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -145,9 +146,16 @@ func (s *Store) RecordAlert(ctx context.Context, r *AlertRecord) error {
 	return err
 }
 
-func (s *Store) ListAlertRecords(ctx context.Context, limit int) ([]*AlertRecord, error) {
+func (s *Store) ListAlertRecords(ctx context.Context, limit int, a Access) ([]*AlertRecord, error) {
+	args := []any{limit}
+	where := ""
+	if a.Viewer != "" { // only alerts about projects the viewer can see (or about none)
+		args = append(args, a.Viewer)
+		where = " WHERE (project_key IS NULL OR project_key IN (SELECT key FROM projects WHERE id" +
+			strings.ReplaceAll(visibleProjects, "?", "$2") + "))"
+	}
 	rows, err := s.Pool.Query(ctx, `SELECT id, at, event, channel_id, channel_name, project_key, service_key, title, status, error
-		FROM alerts_sent ORDER BY id DESC LIMIT $1`, limit)
+		FROM alerts_sent`+where+` ORDER BY id DESC LIMIT $1`, args...)
 	if err != nil {
 		return nil, err
 	}

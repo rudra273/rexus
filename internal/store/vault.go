@@ -167,7 +167,8 @@ type SecretFilter struct {
 	Service       ScopeFilter // "" = all, "-" = project directly, or a service ID
 	Query         string      // matches secret name, project key/name or service key
 	Tag           string
-	ExpiringDays  *int // expires within N days (already-expired secrets included)
+	ExpiringDays  *int   // expires within N days (already-expired secrets included)
+	Access        Access // which projects the caller may see
 }
 
 func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, error) {
@@ -179,6 +180,7 @@ func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, err
 		b.add("s.project_id = ?", f.ProjectID)
 	}
 	b.scope("s.service_id", f.Service)
+	b.access("s.project_id", f.Access)
 	if q := strings.TrimSpace(f.Query); q != "" {
 		b.add("(s.name ILIKE '%' || ? || '%' OR p.key ILIKE '%' || ? || '%' OR p.name ILIKE '%' || ? || '%' OR sv.key ILIKE '%' || ? || '%')", q)
 	}

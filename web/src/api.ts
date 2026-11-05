@@ -57,6 +57,7 @@ export interface User {
   totp_enabled: boolean
   last_login_at: string | null
   created_at: string
+  all_projects: boolean // admins: sees every project that isn't owner-only
 }
 
 export interface SessionResp {
@@ -73,6 +74,7 @@ export interface Project {
   updated_at: string
   job_count: number
   failing_jobs: number
+  owner_only: boolean // hidden from every admin unless the owner shares it with them
   health_status: HealthStatus | 'none'
   check_count: number
   service_count: number
@@ -247,6 +249,9 @@ export interface ApiToken {
   last_used_ip: string | null
   revoked_at: string | null
   status: 'active' | 'expired' | 'revoked'
+  // API tokens: every project the creator can see, or only these (keys).
+  all_projects: boolean
+  allowed_projects: string[]
   // Deploy tokens only: the one place they can read from.
   project: string | null
   project_name: string | null
@@ -333,6 +338,8 @@ export interface Invite {
   invited_by: string | null
   expires_at: string
   created_at: string
+  all_projects: boolean
+  projects: string[] // keys of the projects shared with the invitee (only ones you can see)
 }
 
 export interface AuditRow {
@@ -347,4 +354,5 @@ export interface AuditRow {
 }
 
 export const canWrite = (role: Role) => role === 'owner' || role === 'admin' || role === 'contributor'
+/** Owner and admin manage projects, their structure and who can see them. */
 export const isAdmin = (role: Role) => role === 'owner' || role === 'admin'

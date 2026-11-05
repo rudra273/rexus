@@ -20,18 +20,13 @@ import (
 func (s *Server) handleListDeployTokens(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	projectID := ""
 	if key := strings.TrimSpace(r.URL.Query().Get("project")); key != "" {
-		p, err := s.store.ProjectByKey(r.Context(), key)
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "project not found")
-			return
-		}
-		if err != nil {
-			s.internalError(w, r, err)
+		p, ok := s.projectByKey(w, r, key)
+		if !ok {
 			return
 		}
 		projectID = p.ID
 	}
-	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindDeploy, projectID)
+	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindDeploy, projectID, s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -64,13 +59,8 @@ func (s *Server) handleCreateDeployToken(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	p, err := s.store.ProjectByKey(r.Context(), in.Project)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.projectByKey(w, r, in.Project)
+	if !ok {
 		return
 	}
 	envs, err := s.store.ListEnvironments(r.Context(), p.ID)

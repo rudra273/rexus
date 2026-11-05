@@ -137,17 +137,15 @@ func (s *Server) loadEnv(w http.ResponseWriter, r *http.Request) (*store.Environ
 		s.internalError(w, r, err)
 		return nil, false
 	}
+	if !s.visible(w, r, e.ProjectID, "environment not found") {
+		return nil, false
+	}
 	return e, true
 }
 
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	envs, err := s.store.ListEnvironments(r.Context(), p.ID)
@@ -159,16 +157,11 @@ func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleCreateEnvironment(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	var in struct {
@@ -196,7 +189,7 @@ func (s *Server) handleCreateEnvironment(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleRenameEnvironment(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	e, ok := s.loadEnv(w, r)
@@ -227,7 +220,7 @@ func (s *Server) handleRenameEnvironment(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleDeleteEnvironment(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	e, ok := s.loadEnv(w, r)
@@ -266,6 +259,9 @@ func (s *Server) loadSecret(w http.ResponseWriter, r *http.Request) (*store.Secr
 		s.internalError(w, r, err)
 		return nil, false
 	}
+	if !s.visible(w, r, sec.ProjectID, "secret not found") {
+		return nil, false
+	}
 	return sec, true
 }
 
@@ -290,7 +286,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request, a *au
 	}
 	f := store.SecretFilter{Query: q.Get("q"), Tag: strings.TrimSpace(q.Get("tag")), Service: svcFilter}
 	if p := q.Get("project"); p != "" {
-		proj, err := s.store.ProjectByKey(r.Context(), p)
+		proj, err := s.store.ProjectByKeyFor(r.Context(), s.access(r), p)
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, http.StatusOK, map[string]any{"secrets": []any{}})
 			return
@@ -316,6 +312,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request, a *au
 		}
 		f.ExpiringDays = &n
 	}
+	f.Access = s.access(r)
 	secrets, err := s.store.ListSecrets(r.Context(), f)
 	if err != nil {
 		s.internalError(w, r, err)

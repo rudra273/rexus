@@ -105,6 +105,7 @@ type CheckFilter struct {
 	ProjectID   string
 	Service     ScopeFilter
 	Environment ScopeFilter
+	Access      Access // which projects the caller may see
 }
 
 func (s *Store) ListChecks(ctx context.Context, f CheckFilter) ([]*HealthCheck, error) {
@@ -114,6 +115,7 @@ func (s *Store) ListChecks(ctx context.Context, f CheckFilter) ([]*HealthCheck, 
 	}
 	b.scope("c.service_id", f.Service)
 	b.scope("c.environment_id", f.Environment)
+	b.access("c.project_id", f.Access)
 	return s.listHealth(ctx, b.sql(), b.args...)
 }
 

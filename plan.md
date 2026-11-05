@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–7 + services built.** Phase 9 (deploy tokens) is built. Next: finish Phase 8 (Cloudflare Access) and Phase 10 (project access per user); see §13.
+Status: **Phases 1–7 + services built.** Phases 9 (deploy tokens) and 10 (project access per user) are built. Open: Cloudflare Access (Phase 8, optional); see §13.
 
 ---
 
@@ -440,7 +440,7 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 **Built:** Phases 1–7 (foundation + keepalive jobs, Vault, team, health checks + dashboard, alerts, backups, read-only API) and optional **services** per project. How they work is in the README and in §1–12 above; the detailed build notes are in git history.
 
-**Built since:** Phase 9 (deploy tokens). **Next:** Phase 8 (Cloudflare Tunnel — setup, no code; Access still to do) → Phase 10 (project access per user). Phase 11 (Rexus pushes secrets into deployments) is future.
+**Built since:** Phase 9 (deploy tokens) and Phase 10 (project access per user). **Open:** Phase 8's Cloudflare Access (optional). Phase 11 (Rexus pushes secrets into deployments) is future.
 
 ### Phase 8 — Public HTTPS address with Cloudflare Tunnel
 
@@ -517,7 +517,8 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 
 **Done when:** a project on a cloud platform starts with only `REXUS_URL` + `REXUS_TOKEN` set, and after changing a secret in the Vault and restarting, the app uses the new value.
 
-### Phase 10 — Project access per user
+### Phase 10 — Project access per user ✅ built
+> Built Nov 2026. Notes: one rule in the store (`visibleProjects`, `store.Access`) decides who sees a project, applied to every list and every lookup by ID — hidden things answer 404; migration `0010_project_access.sql` (upgrade changes nothing anyone sees: admins → all projects, contributors and viewers → every existing project, API tokens → all they can see); contributors can no longer create, rename or delete projects or change environments and services; explicit grants override *owner only*; admins always see projects they create (not owner-only ones); an admin editing a user only changes grants within what they can see; audit entries carry a project ID, so people only read the history of projects they can see (access changes are logged per project); API tokens act as their creator, looked up live on every request, and can be limited to chosen projects; invites carry the access to apply on joining; demoting an admin clears their "all projects" flag, and an ownership transfer makes the old owner an all-projects admin. Verified with a five-person end-to-end test (owner, two admins, contributor, viewer; ~90 checks) and an upgrade test from the previous build. Not done: per-project alert routing, owner-only backups (see the open questions below).
 
 **Goal:** each user sees only the projects shared with them. The owner always sees everything.
 

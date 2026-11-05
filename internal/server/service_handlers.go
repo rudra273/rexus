@@ -64,16 +64,7 @@ func (in *serviceInput) apply(x *store.Service) error {
 }
 
 func (s *Server) loadProject(w http.ResponseWriter, r *http.Request) (*store.Project, bool) {
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return nil, false
-	}
-	if err != nil {
-		s.internalError(w, r, err)
-		return nil, false
-	}
-	return p, true
+	return s.projectByKey(w, r, r.PathValue("key"))
 }
 
 func (s *Server) loadService(w http.ResponseWriter, r *http.Request) (*store.Service, bool) {
@@ -89,6 +80,9 @@ func (s *Server) loadService(w http.ResponseWriter, r *http.Request) (*store.Ser
 	}
 	if err != nil {
 		s.internalError(w, r, err)
+		return nil, false
+	}
+	if !s.visible(w, r, x.ProjectID, "service not found") {
 		return nil, false
 	}
 	return x, true
@@ -108,7 +102,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request, a *a
 }
 
 func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	p, ok := s.loadProject(w, r)
@@ -142,7 +136,7 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request, a *
 }
 
 func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	x, ok := s.loadService(w, r)
@@ -178,7 +172,7 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request, a *
 // handleDeleteService deletes an empty service only. Its secrets, jobs and
 // checks are never removed with it: move or delete them first.
 func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	x, ok := s.loadService(w, r)

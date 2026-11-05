@@ -81,13 +81,14 @@ func (s *Server) buildJob(r *http.Request, in *jobInput, j *store.Job) error {
 	case j.ID == "" && key == "":
 		return errors.New("choose a project for this job")
 	case j.ID == "":
-		p, err := s.store.ProjectByKey(r.Context(), key)
+		p, err := s.store.ProjectByKeyFor(r.Context(), s.access(r), key)
 		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("project %q not found", key)
 		}
 		if err != nil {
 			return err
 		}
+		s.noteProject(r, p.ID)
 		j.ProjectID, j.ProjectKey = p.ID, p.Key
 	case key != "" && key != j.ProjectKey:
 		return errors.New("a job can't be moved to another project — create a new job there instead")
@@ -202,6 +203,9 @@ func (s *Server) loadJob(w http.ResponseWriter, r *http.Request) (*store.Job, bo
 		s.internalError(w, r, err)
 		return nil, false
 	}
+	if !s.visible(w, r, j.ProjectID, "job not found") {
+		return nil, false
+	}
 	return j, true
 }
 
@@ -215,17 +219,13 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, a *authC
 		return
 	}
 	if key := r.URL.Query().Get("project"); key != "" {
-		p, err := s.store.ProjectByKey(r.Context(), key)
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "project not found")
-			return
-		}
-		if err != nil {
-			s.internalError(w, r, err)
+		p, ok := s.projectByKey(w, r, key)
+		if !ok {
 			return
 		}
 		f.ProjectID = p.ID
 	}
+	f.Access = s.access(r)
 	jobs, err := s.store.ListJobs(r.Context(), f)
 	if err != nil {
 		s.internalError(w, r, err)

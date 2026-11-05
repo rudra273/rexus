@@ -121,11 +121,14 @@ func (s *Server) loadCheck(w http.ResponseWriter, r *http.Request) (*store.Healt
 		s.internalError(w, r, err)
 		return nil, false
 	}
+	if !s.visible(w, r, c.ProjectID, "health check not found") {
+		return nil, false
+	}
 	return c, true
 }
 
 func (s *Server) handleListChecks(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	checks, err := s.store.ListHealthChecks(r.Context())
+	checks, err := s.store.ListChecks(r.Context(), store.CheckFilter{Access: s.access(r)})
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -147,6 +150,7 @@ func (s *Server) handleListProjectChecks(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	f.ProjectID = p.ID
+	f.Access = s.access(r)
 	checks, err := s.store.ListChecks(r.Context(), f)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -159,13 +163,8 @@ func (s *Server) handleCreateCheck(w http.ResponseWriter, r *http.Request, a *au
 	if !requireWrite(w, a) {
 		return
 	}
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	var in checkInput

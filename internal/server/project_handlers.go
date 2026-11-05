@@ -32,7 +32,7 @@ func validateDescription(d string) (string, error) {
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	projects, err := s.store.ListProjects(r.Context())
+	projects, err := s.store.ListProjectsFor(r.Context(), s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -41,20 +41,15 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request, a *a
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": p})
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
 	var in struct {
@@ -94,26 +89,28 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 }
 
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	var in struct {
 		Key         *string `json:"key"`
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
+		OwnerOnly   *bool   `json:"owner_only"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	// Hiding a project from every admin is the owner's call alone.
+	if in.OwnerOnly != nil && a.user.Role != "owner" {
+		writeError(w, http.StatusForbidden, "only the owner can mark a project owner-only")
+		return
+	}
+	var err error
 	key, name, desc := p.Key, p.Name, p.Description
 	if in.Key != nil {
 		if key, err = store.NormalizeProjectKey(*in.Key); err != nil {
@@ -142,6 +139,14 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 		s.internalError(w, r, err)
 		return
 	}
+	if in.OwnerOnly != nil && *in.OwnerOnly != p.OwnerOnly {
+		if err := s.store.SetProjectOwnerOnly(r.Context(), p.ID, *in.OwnerOnly); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		updated.OwnerOnly = *in.OwnerOnly
+		s.audit(r, a, "project.owner_only", "project", p.ID, map[string]any{"key": key, "owner_only": *in.OwnerOnly})
+	}
 	if key != p.Key {
 		s.audit(r, a, "project.rename", "project", p.ID, map[string]any{"from": p.Key, "to": key})
 	}
@@ -150,16 +155,11 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 }
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireWrite(w, a) {
+	if !requireAdmin(w, a) {
 		return
 	}
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	p, ok := s.loadProject(w, r)
+	if !ok {
 		return
 	}
 	if err := s.store.DeleteProject(r.Context(), p.ID); err != nil {

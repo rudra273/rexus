@@ -15,7 +15,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request, a *aut
 	if !requireAdmin(w, a) {
 		return
 	}
-	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindAPI, "")
+	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindAPI, "", s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -31,6 +31,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a *au
 		Name          string `json:"name"`
 		Role          string `json:"role"`
 		ExpiresInDays *int   `json:"expires_in_days"` // null = never expires
+		// Limit the token to these projects (keys). Omitted or null = every project the creator can see.
+		Projects *[]string `json:"projects"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -63,17 +65,50 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a *au
 		return
 	}
 
+	// A token can't be given a project its creator can't see.
+	var projectIDs []string
+	if in.Projects != nil {
+		ids, ok, err := s.store.ProjectIDsByKeys(r.Context(), *in.Projects)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if !ok || len(ids) == 0 {
+			writeError(w, http.StatusBadRequest, "choose at least one project that exists")
+			return
+		}
+		for _, id := range ids {
+			if can, err := s.store.CanSee(r.Context(), s.access(r), id); err != nil {
+				s.internalError(w, r, err)
+				return
+			} else if !can {
+				writeError(w, http.StatusBadRequest, "choose at least one project that exists")
+				return
+			}
+		}
+		projectIDs = ids
+	}
+
 	token, prefix := newToken()
-	t, err := s.store.CreateToken(r.Context(), name, prefix, in.Role, crypto.HashToken(token), a.user.ID, expires)
+	t, err := s.store.CreateToken(r.Context(), name, prefix, in.Role, crypto.HashToken(token), a.user.ID, expires, projectIDs)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
 	details := map[string]any{"name": t.Name, "role": t.Role, "prefix": t.Prefix, "expires": "never"}
+	if projectIDs != nil {
+		details["project_count"] = len(projectIDs)
+	}
 	if expires != nil {
 		details["expires"] = expires.UTC().Format("2006-01-02")
 	}
 	s.audit(r, a, "token.create", "api_token", t.ID, details)
+	if projectIDs != nil {
+		keys, _ := s.store.ProjectKeysByIDs(r.Context(), projectIDs)
+		for _, id := range projectIDs {
+			s.auditProject(r, a, id, "token.project", "api_token", t.ID, map[string]any{"name": t.Name, "project": keys[id]})
+		}
+	}
 	// The only time the token itself is ever returned.
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "meta": t})
 }
@@ -97,6 +132,9 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a *au
 	if existing.Kind == store.TokenKindDeploy {
 		if !canWrite(a.user.Role) {
 			writeError(w, http.StatusForbidden, "your role can't revoke deploy tokens")
+			return
+		}
+		if existing.ProjectID == nil || !s.visible(w, r, *existing.ProjectID, "token not found (or already revoked)") {
 			return
 		}
 	} else if !requireAdmin(w, a) {
