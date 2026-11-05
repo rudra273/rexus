@@ -1,7 +1,63 @@
 @import "tailwindcss";
 
+/*
+ * Dark is the default. The light theme re-maps the colour scale that the components already use
+ * (zinc greys and the status colours), so every page gets it without per-page changes.
+ * <html data-theme> is set by prefs.tsx; data-density="compact" shrinks the root font size.
+ */
 :root {
   color-scheme: dark;
+  /* Charts: one response-time hue (not a status colour) + reserved status colours. */
+  --chart-line: #3987e5;
+  --st-up: #10b981;
+  --st-degraded: #f59e0b;
+  --st-down: #ef4444;
+  --st-none: #3f3f46;
+}
+
+:root[data-theme="light"] {
+  --chart-line: #2a78d6;
+  --st-up: #059669;
+  --st-degraded: #d97706;
+  --st-down: #dc2626;
+  --st-none: #d4d4d8;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-zinc-50: #09090b;
+  --color-zinc-100: #18181b;
+  --color-zinc-200: #27272a;
+  --color-zinc-300: #3f3f46;
+  --color-zinc-400: #52525b;
+  --color-zinc-500: #6b6b74;
+  --color-zinc-600: #a1a1aa;
+  --color-zinc-700: #d4d4d8;
+  --color-zinc-800: #e4e4e7;
+  --color-zinc-900: #ffffff;
+  --color-zinc-950: #f4f4f5;
+
+  --color-red-300: #b91c1c;
+  --color-red-400: #dc2626;
+  --color-red-900: #fecaca;
+  --color-red-950: #fef2f2;
+  --color-amber-300: #92400e;
+  --color-amber-400: #b45309;
+  --color-amber-800: #fcd34d;
+  --color-amber-900: #fde68a;
+  --color-amber-950: #fffbeb;
+  --color-sky-300: #0369a1;
+  --color-sky-400: #0284c7;
+  --color-sky-900: #bae6fd;
+  --color-sky-950: #f0f9ff;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #059669;
+  --color-emerald-900: #a7f3d0;
+  --color-emerald-950: #ecfdf5;
+}
+
+:root[data-density="compact"] {
+  font-size: 14.5px;
 }
 
 body {
@@ -11,4 +67,15 @@ body {
 
 code, .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Keyboard focus is always visible. */
+:focus-visible {
+  outline: 2px solid var(--color-emerald-500);
+  outline-offset: 2px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
 }

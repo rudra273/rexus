@@ -188,7 +188,7 @@ export function JobFormPage() {
 
   return (
     <>
-      <PageHeader title={editing ? 'Edit job' : 'New job'} subtitle="An HTTP request on a schedule — ping a site or keep an API awake." />
+      <PageHeader crumbs={[{ label: 'Jobs', to: '/jobs' }, { label: editing ? 'Edit job' : 'New job' }]} title={editing ? 'Edit job' : 'New job'} subtitle="An HTTP request on a schedule — ping a site or keep an API awake." />
       <Card className="max-w-2xl p-5">
         <form onSubmit={submit} className="space-y-5">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -408,6 +408,12 @@ export function JobDetailPage() {
   return (
     <>
       <PageHeader
+        crumbs={[
+          { label: 'Projects', to: '/projects' },
+          { label: job.project_name, to: `/projects/${job.project_key}` },
+          { label: 'Jobs', to: `/projects/${job.project_key}#jobs` },
+          { label: job.name },
+        ]}
         title={
           <span className="flex items-center gap-2.5">
             <StatusDot status={job.enabled ? job.last_status : 'disabled'} />

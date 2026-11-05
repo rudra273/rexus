@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, canWrite, type HealthCheck, type HealthEvent, type HealthStatus, type Project, type SeriesBucket, type Service, type ServiceFilter, type Uptime } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
+import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
+import { fmtDuration, responseStats, UptimeBar } from './charts'
 import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, serviceQuery, useEnvironments, useServices } from './services'
 
 // ───────────────────────── helpers ─────────────────────────
@@ -73,7 +74,7 @@ export function ProjectChecks({ project, services, scope }: { project: Project; 
   }, [load])
 
   return (
-    <section className="mt-6">
+    <section id="checks" className="mt-6 scroll-mt-6">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="font-medium text-zinc-200">Health checks</h2>
         {writable && (
@@ -133,28 +134,54 @@ interface Series {
   buckets: SeriesBucket[]
 }
 
-function ResponseChart({ series, limit }: { series: Series; limit: number | null }) {
-  const W = 640
-  const H = 190
-  const pad = { l: 46, r: 8, t: 10, b: 22 }
-  const innerW = W - pad.l - pad.r
+/** Rounds up to a tidy axis maximum: 1, 2, 2.5 or 5 × a power of ten. */
+function niceCeil(v: number): number {
+  const mag = 10 ** Math.floor(Math.log10(v))
+  for (const f of [1, 2, 2.5, 5, 10]) if (f * mag >= v) return f * mag
+  return 10 * mag
+}
+
+/** Width of an element, kept up to date (charts draw at real pixel size, so text never stretches). */
+function useWidth() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [w, setW] = useState(0)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(([e]) => setW(Math.floor(e.contentRect.width)))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, w] as const
+}
+
+function ResponseChart({ series, limit, height = 200 }: { series: Series; limit: number | null; height?: number }) {
+  const [ref, W] = useWidth()
+  const [hover, setHover] = useState<number | null>(null)
+  const H = height
+  const pad = { l: 52, r: 8, t: 8, b: 22 }
+  const innerW = Math.max(1, W - pad.l - pad.r)
   const innerH = H - pad.t - pad.b
   const end = Date.now()
   const start = end - series.window_seconds * 1000
   const x = (t: number) => pad.l + ((t - start) / (series.window_seconds * 1000)) * innerW
   const bucketW = Math.max(2, (series.bucket_seconds / series.window_seconds) * innerW)
-
-  const withData = series.buckets.filter((b) => b.avg_ms != null)
-  if (series.buckets.length === 0) return <Empty title="No results in this range yet" />
-
-  const peak = Math.max(limit ?? 0, ...withData.map((b) => b.max_ms ?? b.avg_ms ?? 0), 100)
-  const top = peak * 1.1
-  const y = (ms: number) => pad.t + (1 - ms / top) * innerH
   const mid = (b: SeriesBucket) => new Date(b.t).getTime() + (series.bucket_seconds * 1000) / 2
 
-  const line = withData.map((b, i) => `${i === 0 ? 'M' : 'L'}${x(mid(b)).toFixed(1)},${y(b.avg_ms as number).toFixed(1)}`).join(' ')
-  const ticks = [0, 0.5, 1].map((f) => Math.round(top * f))
-  // Short windows: just the time. A day: date + time (so "10:22 … 10:22" isn't ambiguous). Longer: date.
+  const pts = series.buckets.filter((b) => b.avg_ms != null)
+  // Scale to the data. The slow-response limit is drawn only when it sits near the data,
+  // so a far-away limit can't squash the line flat against the bottom.
+  const dataMax = Math.max(...pts.map((b) => b.avg_ms as number), 50)
+  let top = niceCeil(dataMax * 1.15)
+  const showLimit = limit != null && limit <= top * 1.5
+  if (showLimit && limit != null && limit > top) top = niceCeil(limit * 1.1)
+  const y = (ms: number) => pad.t + (1 - ms / top) * innerH
+  const ticks = [0, top / 2, top]
+
+  const line = pts.map((b, i) => `${i ? 'L' : 'M'}${x(mid(b)).toFixed(1)},${y(b.avg_ms as number).toFixed(1)}`).join(' ')
+  const area = pts.length
+    ? `${line} L${x(mid(pts[pts.length - 1])).toFixed(1)},${pad.t + innerH} L${x(mid(pts[0])).toFixed(1)},${pad.t + innerH} Z`
+    : ''
   const fmtX = (t: number) =>
     series.window_seconds <= 6 * 3600
       ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -162,46 +189,146 @@ function ResponseChart({ series, limit }: { series: Series; limit: number | null
         ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
         : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' })
 
+  const onMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (!pts.length) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const t = start + ((e.clientX - r.left - pad.l) / innerW) * (end - start)
+    let best = 0
+    pts.forEach((b, i) => {
+      if (Math.abs(mid(b) - t) < Math.abs(mid(pts[best]) - t)) best = i
+    })
+    setHover(best)
+  }
+  const h = hover != null ? pts[hover] : null
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Response time chart">
-      {ticks.map((v) => (
-        <g key={v}>
-          <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="#27272a" />
-          <text x={pad.l - 6} y={y(v) + 3} textAnchor="end" fontSize="10" fill="#71717a">{v} ms</text>
-        </g>
-      ))}
-      {limit != null && (
-        <g>
-          <line x1={pad.l} x2={W - pad.r} y1={y(limit)} y2={y(limit)} stroke="#fbbf24" strokeDasharray="4 3" opacity="0.7" />
-          <text x={W - pad.r} y={y(limit) - 3} textAnchor="end" fontSize="10" fill="#fbbf24">limit {limit} ms</text>
-        </g>
+    <div ref={ref} className="relative" style={{ height: H }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      {series.buckets.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-sm text-zinc-500">No results in this range yet</div>
+      ) : W > 0 && (
+        <svg width={W} height={H} role="img" aria-label="Response time chart" className="block">
+          {ticks.map((v) => (
+            <g key={v}>
+              <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} style={{ stroke: 'var(--color-zinc-800)' }} />
+              <text x={pad.l - 8} y={y(v) + 4} textAnchor="end" fontSize="11" style={{ fill: 'var(--color-zinc-500)' }}>{Math.round(v)} ms</text>
+            </g>
+          ))}
+          {series.buckets.map((b) =>
+            b.fail > 0 ? <rect key={`f${b.t}`} x={x(new Date(b.t).getTime())} y={pad.t} width={bucketW} height={innerH} style={{ fill: 'var(--st-down)' }} opacity="0.22" /> : null,
+          )}
+          {showLimit && limit != null && (
+            <g>
+              <line x1={pad.l} x2={W - pad.r} y1={y(limit)} y2={y(limit)} style={{ stroke: 'var(--st-degraded)' }} strokeDasharray="4 4" opacity="0.8" />
+              <text x={W - pad.r} y={y(limit) - 4} textAnchor="end" fontSize="11" style={{ fill: 'var(--st-degraded)' }}>slow above {limit} ms</text>
+            </g>
+          )}
+          {area && <path d={area} style={{ fill: 'var(--chart-line)' }} opacity="0.12" />}
+          {line && <path d={line} fill="none" style={{ stroke: 'var(--chart-line)' }} strokeWidth="2" strokeLinejoin="round" />}
+          {h && (
+            <g>
+              <line x1={x(mid(h))} x2={x(mid(h))} y1={pad.t} y2={pad.t + innerH} style={{ stroke: 'var(--color-zinc-500)' }} />
+              <circle cx={x(mid(h))} cy={y(h.avg_ms as number)} r="4" style={{ fill: 'var(--chart-line)', stroke: 'var(--color-zinc-900)' }} strokeWidth="2" />
+            </g>
+          )}
+          {[start, start + (end - start) / 2, end].map((t, i) => (
+            <text key={i} x={i === 0 ? pad.l : x(t)} y={H - 4} textAnchor={i === 0 ? 'start' : i === 2 ? 'end' : 'middle'} fontSize="11" style={{ fill: 'var(--color-zinc-500)' }}>{fmtX(t)}</text>
+          ))}
+        </svg>
       )}
-      {series.buckets.map((b) =>
-        b.fail > 0 ? (
-          <rect key={`f${b.t}`} x={x(new Date(b.t).getTime())} y={pad.t} width={bucketW} height={innerH} fill="#ef4444" opacity="0.28" />
-        ) : null,
+      {h && (
+        <div
+          className="pointer-events-none absolute top-0 z-10 whitespace-nowrap rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 shadow-lg"
+          style={{ left: x(mid(h)), transform: `translateX(${x(mid(h)) > W * 0.6 ? 'calc(-100% - 10px)' : '10px'})` }}
+        >
+          <div className="text-zinc-400">{fmtTime(h.t)}</div>
+          <div><b className="font-semibold">{Math.round(h.avg_ms as number)} ms</b> avg{h.max_ms != null && ` · ${h.max_ms} ms max`}</div>
+          <div className="text-zinc-400">{h.ok + h.fail} check{h.ok + h.fail === 1 ? '' : 's'}{h.fail > 0 && <span className="text-red-300"> · {h.fail} failed</span>}</div>
+        </div>
       )}
-      {line && <path d={line} fill="none" stroke="#34d399" strokeWidth="1.6" strokeLinejoin="round" />}
-      {withData.length <= 60 && withData.map((b) => <circle key={`c${b.t}`} cx={x(mid(b))} cy={y(b.avg_ms as number)} r="2" fill="#34d399" />)}
-      {/* invisible hover targets with native tooltips */}
-      {series.buckets.map((b) => (
-        <rect key={`h${b.t}`} x={x(new Date(b.t).getTime())} y={pad.t} width={bucketW} height={innerH} fill="transparent">
-          <title>
-            {new Date(b.t).toLocaleString()}
-            {b.avg_ms != null ? ` · avg ${Math.round(b.avg_ms)} ms, max ${b.max_ms} ms` : ''}
-            {` · ${b.ok + b.fail} check${b.ok + b.fail === 1 ? '' : 's'}`}
-            {b.fail > 0 ? ` · ${b.fail} failed` : ''}
-          </title>
-        </rect>
-      ))}
-      {[start, start + (end - start) / 2, end].map((t, i) => (
-        <text key={i} x={x(t)} y={H - 6} textAnchor={i === 0 ? 'start' : i === 2 ? 'end' : 'middle'} fontSize="10" fill="#71717a">{fmtX(t)}</text>
-      ))}
-    </svg>
+      {!showLimit && limit != null && pts.length > 0 && (
+        <div className="absolute right-2 top-0 text-[11px] text-zinc-500">slow above {limit} ms · off this scale</div>
+      )}
+    </div>
   )
 }
 
 // ───────────────────────── check detail ─────────────────────────
+
+const VALUE_TONE = { up: 'text-emerald-400', degraded: 'text-amber-300', down: 'text-red-400', unknown: 'text-zinc-300' } as const
+
+function pctTone(v: number | null): string {
+  if (v == null) return 'text-zinc-50'
+  return v >= 99.5 ? 'text-emerald-400' : v >= 95 ? 'text-amber-300' : 'text-red-400'
+}
+
+/** One cell of the stat strip. */
+function Cell({ label, value, sub, className }: { label: string; value: ReactNode; sub?: ReactNode; className?: string }) {
+  return (
+    <div className="min-w-0 px-4 py-3">
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className={cx('mt-0.5 truncate text-lg font-semibold', className ?? 'text-zinc-50')}>{value}</div>
+      {sub && <div className="truncate text-xs text-zinc-500">{sub}</div>}
+    </div>
+  )
+}
+
+function StatStrip({ check: c, uptime }: { check: HealthCheck; uptime: Uptime }) {
+  const days = sslDays(c.ssl_expires_at)
+  const since = c.status_since ? Date.now() - new Date(c.status_since).getTime() : null
+  const sslWarn = days != null && (days < 0 || (c.ssl_warn_days != null && days < c.ssl_warn_days))
+  return (
+    <Card className="mb-4 grid grid-cols-2 divide-zinc-800 sm:grid-cols-3 lg:grid-cols-6 lg:divide-x [&>*]:border-zinc-800 max-lg:[&>*]:border-b">
+      <Cell
+        label="Status"
+        value={c.enabled ? STATUS_LABEL[c.status] : 'Paused'}
+        className={c.enabled ? VALUE_TONE[c.status] : 'text-zinc-400'}
+        sub={!c.enabled ? 'not being checked' : since != null && c.status !== 'unknown' ? `for ${fmtDuration(since)}` : 'waiting for results'}
+      />
+      <Cell
+        label="Last check"
+        value={<span title={fmtTime(c.last_checked_at)}>{c.last_checked_at ? timeAgo(c.last_checked_at) : 'never'}</span>}
+        sub={`every ${fmtInterval(c.interval_seconds)}${c.last_status_code ? ` · HTTP ${c.last_status_code}` : ''}`}
+      />
+      <Cell label="Response" value={c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'} sub="latest" />
+      <Cell label="Uptime 24h" value={fmtPct(uptime['24h'])} className={pctTone(uptime['24h'])} sub={`7d ${fmtPct(uptime['7d'])}`} />
+      <Cell label="Uptime 30d" value={fmtPct(uptime['30d'])} className={pctTone(uptime['30d'])} sub="last 30 days" />
+      <Cell
+        label="SSL certificate"
+        value={days == null ? (c.url.startsWith('https') ? 'not seen yet' : 'n/a') : days < 0 ? 'expired' : `${days} days`}
+        className={sslWarn ? 'text-amber-300' : undefined}
+        sub={c.ssl_expires_at ? `until ${new Date(c.ssl_expires_at).toLocaleDateString()}` : c.url.startsWith('https') ? undefined : 'plain http'}
+      />
+    </Card>
+  )
+}
+
+function Availability({ check: c, day, events }: { check: HealthCheck; day: Series; events: HealthEvent[] }) {
+  const cutoff = Date.now() - 86_400_000
+  const incidents = events.filter((e) => e.to_status === 'down' && new Date(e.at).getTime() > cutoff).length
+  // Estimated: the share of failed probes in each bucket times the bucket length.
+  const downMs = day.buckets.reduce((sum, b) => sum + (b.ok + b.fail ? (b.fail / (b.ok + b.fail)) * day.bucket_seconds * 1000 : 0), 0)
+  return (
+    <Card className="mb-4 px-4 py-3">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="font-medium text-zinc-200">Last 24 hours</span>
+        <span className="text-xs text-zinc-500">
+          {incidents} incident{incidents === 1 ? '' : 's'} · {downMs >= 60_000 ? `about ${fmtDuration(downMs)} down` : 'no downtime'}
+        </span>
+      </div>
+      <UptimeBar buckets={day.buckets} windowSeconds={day.window_seconds} slots={60} height="h-6" paused={!c.enabled} />
+      <div className="mt-1.5 flex justify-between text-[11px] text-zinc-500">
+        <span>24h ago</span>
+        <span className="hidden sm:inline">
+          <i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-up)' }} />up
+          <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-degraded)' }} />some failed
+          <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-down)' }} />down
+          <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-none)' }} />no data
+        </span>
+        <span>now</span>
+      </div>
+    </Card>
+  )
+}
 
 interface Detail {
   check: HealthCheck
@@ -217,14 +344,20 @@ export function CheckDetailPage() {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [range, setRange] = useState<Range>('24h')
   const [series, setSeries] = useState<Series | null>(null)
+  const [day, setDay] = useState<Series | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [d, s] = await Promise.all([api<Detail>(`/api/checks/${id}`), api<Series>(`/api/checks/${id}/series?range=${range}`)])
+      const [d, s, s24] = await Promise.all([
+        api<Detail>(`/api/checks/${id}`),
+        api<Series>(`/api/checks/${id}/series?range=${range}`),
+        range === '24h' ? Promise.resolve(null) : api<Series>(`/api/checks/${id}/series?range=24h`),
+      ])
       setDetail(d)
       setSeries(s)
+      setDay(s24 ?? s)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -237,7 +370,7 @@ export function CheckDetailPage() {
   }, [load])
 
   if (error) return <ErrorBox error={error} persistent />
-  if (!detail || !series) return <Spinner />
+  if (!detail || !series || !day) return <Spinner />
   const { check: c, uptime, events } = detail
 
   const runNow = async () => {
@@ -271,11 +404,18 @@ export function CheckDetailPage() {
     }
   }
 
-  const days = sslDays(c.ssl_expires_at)
+
+  const st = responseStats(series.buckets)
 
   return (
     <>
       <PageHeader
+        crumbs={[
+          { label: 'Projects', to: '/projects' },
+          { label: c.project_name, to: `/projects/${c.project_key}` },
+          { label: 'Health checks', to: `/projects/${c.project_key}#checks` },
+          { label: c.name },
+        ]}
         title={
           <span className="flex items-center gap-2.5">
             <StatusDot status={c.enabled ? c.status : 'disabled'} />
@@ -284,58 +424,57 @@ export function CheckDetailPage() {
           </span>
         }
         subtitle={
-          <>
-            <Link to={`/projects/${c.project_key}`} className="text-zinc-300 hover:underline">{c.project_name}</Link>
-            {c.service_name && <span className="text-zinc-400"> / {c.service_name}</span>}
-            {c.environment && <span className="ml-2"><EnvBadge env={c.environment} /></span>}
-            <span className="mx-2 text-zinc-600">·</span>
-            <span className="mono">{c.method} {c.url}</span>
-          </>
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {c.service_name && <span className="text-zinc-400">{c.service_name}</span>}
+            {c.environment && <EnvBadge env={c.environment} />}
+            <a href={c.url} target="_blank" rel="noreferrer" className="mono truncate text-zinc-400 hover:text-zinc-200 hover:underline">{c.method} {c.url}</a>
+          </span>
         }
         actions={
           writable && (
             <>
-              <Button onClick={runNow} disabled={running}>{running ? 'Checking…' : 'Check now'}</Button>
-              <Button variant="secondary" onClick={toggle}>{c.enabled ? 'Pause' : 'Resume'}</Button>
-              <Link to={`/checks/${c.id}/edit`}><Button variant="secondary">Edit</Button></Link>
-              <Button variant="danger" onClick={remove}>Delete</Button>
+              <Button onClick={runNow} disabled={running} className="px-3 py-1.5">{running ? 'Checking…' : 'Check now'}</Button>
+              <Button variant="secondary" onClick={toggle} className="px-3 py-1.5">{c.enabled ? 'Pause' : 'Resume'}</Button>
+              <Link to={`/checks/${c.id}/edit`}><Button variant="secondary" className="px-3 py-1.5">Edit</Button></Link>
+              <ActionMenu items={[{ label: 'Delete check', onClick: remove, danger: true }]} />
             </>
           )
         }
       />
 
       {c.enabled && c.status === 'down' && c.last_error && (
-        <div className="mb-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+        <div className="mb-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-2.5 text-sm text-red-300">
           <b>Down</b>{c.status_since ? ` since ${fmtTime(c.status_since)}` : ''} — {c.last_error}
         </div>
       )}
       {c.enabled && c.status === 'degraded' && (
-        <div className="mb-4 rounded-md border border-amber-900 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+        <div className="mb-4 rounded-md border border-amber-900 bg-amber-950/40 px-4 py-2.5 text-sm text-amber-300">
           <b>Degraded</b> — {degradedReason(c)}
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Status" value={<HealthBadge status={c.status} paused={!c.enabled} />} sub={c.status_since ? `since ${timeAgo(c.status_since)}` : undefined} />
-        <Stat label="Last response" value={c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'} sub={c.last_status_code ? `HTTP ${c.last_status_code}` : undefined} />
-        <Stat label="Uptime (24h · 7d · 30d)" value={`${fmtPct(uptime['24h'])} · ${fmtPct(uptime['7d'])} · ${fmtPct(uptime['30d'])}`} small />
-        <Stat
-          label="SSL certificate"
-          value={days == null ? (c.url.startsWith('https') ? 'not seen yet' : 'n/a (http)') : days < 0 ? 'expired' : `${days} days left`}
-          sub={c.ssl_expires_at ? `expires ${new Date(c.ssl_expires_at).toLocaleDateString()}` : undefined}
-          tone={days != null && c.ssl_warn_days != null && days < c.ssl_warn_days ? 'amber' : undefined}
-        />
-      </div>
+      <StatStrip check={c} uptime={uptime} />
+      <Availability check={c} day={day} events={events} />
 
-      <Card className="mb-6 p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-medium text-zinc-200">Response time</h2>
-          <div className="flex gap-1">
+      <Card className="mb-6 px-4 py-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <h2 className="text-sm font-medium text-zinc-200">Response time</h2>
+            {st.avg != null && (
+              <span className="text-xs text-zinc-500">
+                avg <b className="font-semibold text-zinc-200">{st.avg} ms</b>
+                <span className="mx-2 text-zinc-700">|</span>min <b className="font-semibold text-zinc-200">{st.min} ms</b>
+                <span className="mx-2 text-zinc-700">|</span>max <b className="font-semibold text-zinc-200">{st.max} ms</b>
+              </span>
+            )}
+          </div>
+          <div className="inline-flex rounded-md border border-zinc-800 p-0.5" role="group" aria-label="Time range">
             {RANGES.map((r) => (
               <button
                 key={r}
                 onClick={() => setRange(r)}
-                className={cx('rounded px-2.5 py-1 text-xs', r === range ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
+                aria-pressed={r === range}
+                className={cx('rounded px-2.5 py-1 text-xs', r === range ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
               >
                 {r}
               </button>
@@ -343,22 +482,17 @@ export function CheckDetailPage() {
           </div>
         </div>
         <ResponseChart series={series} limit={c.max_response_ms} />
-        <div className="mt-2 flex flex-wrap gap-4 text-xs text-zinc-500">
-          <span><span className="mr-1 inline-block h-2 w-3 rounded-sm bg-emerald-400" />average response time</span>
-          <span><span className="mr-1 inline-block h-2 w-3 rounded-sm bg-red-500/50" />failed checks</span>
-          <span>last checked {c.last_checked_at ? timeAgo(c.last_checked_at) : 'never'} · next {c.enabled ? timeAgo(c.next_check_at) : '—'}</span>
-        </div>
       </Card>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section>
-          <h2 className="mb-3 font-medium text-zinc-200">Recent status changes</h2>
+          <h2 className="mb-2 text-sm font-medium text-zinc-200">Recent status changes</h2>
           {events.length === 0 ? (
-            <Empty title="No incidents">Status changes show up here.</Empty>
+            <Card className="px-4 py-3 text-sm text-zinc-500">No status changes yet.</Card>
           ) : (
             <Card className="divide-y divide-zinc-800/70">
               {events.map((e) => (
-                <div key={e.id} className="px-4 py-2.5 text-sm">
+                <div key={e.id} className="px-4 py-2 text-sm">
                   <div className="flex items-center gap-2">
                     <HealthBadge status={e.from_status} />
                     <span className="text-zinc-600">→</span>
@@ -373,7 +507,7 @@ export function CheckDetailPage() {
         </section>
 
         <section>
-          <h2 className="mb-3 font-medium text-zinc-200">Settings</h2>
+          <h2 className="mb-2 text-sm font-medium text-zinc-200">Settings</h2>
           <Card className="divide-y divide-zinc-800/70 text-sm">
             <Row label="Checked every" value={fmtInterval(c.interval_seconds)} />
             <Row label="Timeout" value={`${c.timeout_seconds}s`} />
@@ -382,6 +516,7 @@ export function CheckDetailPage() {
             <Row label="SSL warning" value={c.ssl_warn_days != null ? `${c.ssl_warn_days} days before expiry` : 'off'} />
             <Row label="Down after" value={`${c.down_threshold} failed check${c.down_threshold === 1 ? '' : 's'} in a row`} />
             <Row label="Up again after" value={`${c.recovery_threshold} successful check${c.recovery_threshold === 1 ? '' : 's'} in a row`} />
+            <Row label="Next check" value={c.enabled ? timeAgo(c.next_check_at) : '—'} />
           </Card>
         </section>
       </div>
@@ -389,19 +524,9 @@ export function CheckDetailPage() {
   )
 }
 
-function Stat({ label, value, sub, small, tone }: { label: string; value: ReactNode; sub?: string; small?: boolean; tone?: 'amber' }) {
-  return (
-    <Card className="min-w-0 px-4 py-3">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className={cx('mt-1 truncate font-semibold', small ? 'text-base' : 'text-lg', tone === 'amber' ? 'text-amber-300' : 'text-zinc-100')}>{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-zinc-500">{sub}</div>}
-    </Card>
-  )
-}
-
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+    <div className="flex items-center justify-between gap-4 px-4 py-2">
       <span className="text-zinc-400">{label}</span>
       <span className="text-right text-zinc-200">{value}</span>
     </div>
@@ -532,6 +657,12 @@ export function CheckFormPage() {
   return (
     <>
       <PageHeader
+        crumbs={[
+          { label: 'Projects', to: '/projects' },
+          { label: projectKey, to: `/projects/${projectKey}` },
+          { label: 'Health checks', to: `/projects/${projectKey}#checks` },
+          { label: editing ? 'Edit' : 'New check' },
+        ]}
         title={editing ? 'Edit health check' : 'New health check'}
         subtitle={<>Project: <Link to={`/projects/${projectKey}`} className="text-zinc-300 hover:underline">{projectKey}</Link></>}
       />

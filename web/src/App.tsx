@@ -1,10 +1,14 @@
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
-import { api, isAdmin } from './api'
+import { isAdmin } from './api'
 import { useAuth } from './auth'
+import { NavIcon, type IconName } from './icons'
 import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from './pages/auth'
 import { CheckDetailPage, CheckFormPage } from './pages/health'
 import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
-import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
+import { DashboardPage } from './pages/dashboard'
+import { ProjectDetailPage, ProjectNewPage, ProjectsPage } from './pages/projects'
+import { ProfilePage } from './pages/profile'
 import { SettingsPage } from './pages/settings'
 import { AlertsPage } from './pages/alerts'
 import { IntegrationsPage } from './pages/integrations'
@@ -54,7 +58,8 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/projects/new" element={<ProjectNewPage />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects/new" element={isAdmin(user.role) ? <ProjectNewPage /> : <Navigate to="/projects" replace />} />
         <Route path="/projects/:key" element={<ProjectDetailPage />} />
         <Route path="/projects/:key/checks/new" element={<CheckFormPage />} />
         <Route path="/checks/:id" element={<CheckDetailPage />} />
@@ -75,81 +80,164 @@ export default function App() {
             {meta.backup_enabled && <Route path="/backups" element={<BackupsPage />} />}
             <Route path="/users" element={<UsersPage />} />
             <Route path="/audit" element={<AuditPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </>
         )}
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   )
 }
 
-function Layout() {
-  const { meta, user, setSession } = useAuth()
-  // The "last backup" indicator is always visible to the owner and admins when backups are on.
-  const backupStatus = useBackupStatus(!!user && isAdmin(user.role) && !!meta?.backup_enabled)
-  const nav = [
-    { to: '/', label: 'Dashboard', end: true },
-    ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', end: false }] : []),
-    ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', end: false }] : []),
-    ...(user && isAdmin(user.role)
-      ? [
-          { to: '/alerts', label: 'Alerts', end: false },
-          { to: '/integrations', label: 'API', end: false },
-          ...(meta?.backup_enabled ? [{ to: '/backups', label: 'Backups', end: false }] : []),
-          { to: '/users', label: 'Users', end: false },
-          { to: '/audit', label: 'Audit log', end: false },
-        ]
-      : []),
-    { to: '/settings', label: 'Settings', end: false },
-  ]
+interface NavItem {
+  to: string
+  label: string
+  icon: IconName
+  end?: boolean
+}
 
-  const logout = async () => {
-    await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-    setSession(null)
-  }
+function initials(name: string, email: string) {
+  const source = name.trim() || email
+  const parts = source.split(/[\s@._-]+/).filter(Boolean)
+  const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : source.slice(0, 2)
+  return letters.toUpperCase()
+}
+
+function SideLink({ item }: { item: NavItem }) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      className={({ isActive }) =>
+        cx(
+          'flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium',
+          isActive ? 'bg-emerald-500/10 text-emerald-300' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100',
+        )
+      }
+    >
+      <NavIcon name={item.icon} />
+      <span className="truncate">{item.label}</span>
+    </NavLink>
+  )
+}
+
+function Layout() {
+  const { meta, user } = useAuth()
+  const { pathname } = useLocation()
+  const [drawer, setDrawer] = useState(false)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  // The "last backup" indicator is always visible to the owner and admins when backups are on.
+  const admin = !!user && isAdmin(user.role)
+  const backupStatus = useBackupStatus(admin && !!meta?.backup_enabled)
+
+  const workspace: NavItem[] = [
+    { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
+    { to: '/projects', label: 'Projects', icon: 'projects' },
+    ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', icon: 'vault' as IconName }] : []),
+    ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', icon: 'jobs' as IconName }] : []),
+  ]
+  const administration: NavItem[] = admin
+    ? [
+        { to: '/alerts', label: 'Alerts', icon: 'alerts' },
+        { to: '/integrations', label: 'API & integrations', icon: 'api' },
+        { to: '/users', label: 'Users', icon: 'users' },
+        { to: '/audit', label: 'Audit log', icon: 'audit' },
+        ...(meta?.backup_enabled ? [{ to: '/backups', label: 'Backups', icon: 'backups' as IconName }] : []),
+      ]
+    : []
+
+  // Close the drawer after navigating, and on Escape. Focus moves into it when it opens.
+  useEffect(() => setDrawer(false), [pathname])
+  useEffect(() => {
+    if (!drawer) return
+    closeRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setDrawer(false)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawer])
+
+  const sidebar = (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-2.5 px-4 py-4">
+        <img src="/favicon.svg" alt="" className="h-7 w-7" />
+        <div className="min-w-0 truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</div>
+      </div>
+
+      <nav aria-label="Main" className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-3">
+        <div>
+          <div className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Workspace</div>
+          <div className="space-y-0.5">{workspace.map((n) => <SideLink key={n.to} item={n} />)}</div>
+        </div>
+        {administration.length > 0 && (
+          <div>
+            <div className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Administration</div>
+            <div className="space-y-0.5">{administration.map((n) => <SideLink key={n.to} item={n} />)}</div>
+          </div>
+        )}
+      </nav>
+
+      <div className="shrink-0 space-y-1 border-t border-zinc-800 px-3 py-3">
+        <BackupPill status={backupStatus} />
+        {admin && <SideLink item={{ to: '/settings', label: 'Settings', icon: 'settings' }} />}
+        <div className="flex items-center gap-1">
+          <NavLink
+            to="/profile"
+            className={({ isActive }) =>
+              cx('flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2', isActive ? 'bg-emerald-500/10' : 'hover:bg-zinc-900')
+            }
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100">
+              {user ? initials(user.name, user.email) : ''}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-zinc-100">{user?.name || user?.email}</span>
+              <span className="block truncate text-xs capitalize text-zinc-500">{user?.role}</span>
+            </span>
+          </NavLink>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="min-h-screen md:flex">
-      <aside className="border-b border-zinc-800 bg-zinc-950 md:sticky md:top-0 md:h-screen md:w-56 md:shrink-0 md:border-r md:border-b-0">
-        <div className="flex items-center gap-2.5 px-4 py-4">
-          <img src="/favicon.svg" alt="" className="h-7 w-7" />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</div>
-          </div>
-        </div>
-        <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:pb-0">
-          {nav.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                cx('rounded-md px-3 py-2 text-sm whitespace-nowrap', isActive ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200')
-              }
+      {/* Desktop sidebar */}
+      <aside className="hidden border-r border-zinc-800 bg-zinc-950 md:sticky md:top-0 md:block md:h-screen md:w-60 md:shrink-0">{sidebar}</aside>
+
+      {/* Mobile top bar + drawer */}
+      <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-zinc-800 bg-zinc-950 px-4 py-2.5 md:hidden">
+        <button
+          onClick={() => setDrawer(true)}
+          aria-label="Open menu"
+          aria-expanded={drawer}
+          className="rounded-md p-1.5 text-zinc-300 hover:bg-zinc-900"
+        >
+          <NavIcon name="menu" />
+        </button>
+        <img src="/favicon.svg" alt="" className="h-6 w-6" />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</span>
+      </header>
+      {drawer && (
+        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r border-zinc-800 bg-zinc-950 shadow-xl">
+            <button
+              ref={closeRef}
+              onClick={() => setDrawer(false)}
+              aria-label="Close menu"
+              className="absolute right-2 top-3 rounded-md p-1.5 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
             >
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="hidden px-2 py-4 md:absolute md:bottom-0 md:block md:w-56">
-          <BackupPill status={backupStatus} />
-          <div className="mt-1 truncate px-2 text-xs text-zinc-400">{user?.email}</div>
-          <div className="mt-0.5 flex items-center justify-between px-2">
-            <span className="text-[11px] text-zinc-500">{user?.role}</span>
-            <button onClick={logout} className="text-xs text-zinc-500 hover:text-zinc-200">Log out</button>
+              <NavIcon name="close" />
+            </button>
+            {sidebar}
           </div>
         </div>
-      </aside>
+      )}
+
       <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
-        <div className="mb-3 md:hidden">
-          <BackupPill status={backupStatus} />
-        </div>
         <div className="mx-auto max-w-6xl">
           <Outlet />
-        </div>
-        <div className="mt-10 text-right md:hidden">
-          <button onClick={logout} className="text-xs text-zinc-500 hover:text-zinc-200">Log out ({user?.email})</button>
         </div>
       </main>
     </div>

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, canWrite, isAdmin, type HealthCheck, type Job, type Project, type Secret } from '../api'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { api, canWrite, isAdmin, type Job, type Project } from '../api'
 import { useAuth } from '../auth'
-import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo, type DotStatus } from '../ui'
+import { NavIcon } from '../icons'
+import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, cx, type DotStatus } from '../ui'
 import { JobTable } from './jobs'
-import { degradedReason, ProjectChecks } from './health'
-import { ExpiryBadge, ProjectVault } from './vault'
+import { ProjectChecks } from './health'
+import { ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 import { ProjectDeployTokens } from './deploy_tokens'
 import { ProjectAccessModal } from './access'
@@ -22,21 +23,6 @@ function slugify(s: string) {
     .replace(/-+$/, '')
 }
 
-interface AttentionItem {
-  id: string
-  tone: 'red' | 'amber'
-  label: string
-  title: string
-  sub: string
-  to: string
-  right?: ReactNode
-}
-
-/** "Project" or "Project / service" for attention items. */
-function scopeName(r: { project_name: string; service_key: string | null }) {
-  return r.service_key ? `${r.project_name} / ${r.service_key}` : r.project_name
-}
-
 const SEVERITY: Record<string, number> = { down: 0, degraded: 1, unknown: 2, up: 3, none: 4 }
 
 function projectDot(p: Project): DotStatus {
@@ -45,26 +31,47 @@ function projectDot(p: Project): DotStatus {
   return 'none'
 }
 
-export function DashboardPage() {
+type HealthFilter = 'all' | 'down' | 'degraded' | 'up' | 'none' | 'failing'
+type SortKey = 'health' | 'name' | 'recent'
+type View = 'grid' | 'list'
+
+const VIEW_KEY = 'rexus.projects.view'
+
+function healthLabel(p: Project) {
+  if (p.health_status === 'none') return 'No checks'
+  return p.health_status === 'unknown' ? 'Checking…' : p.health_status[0].toUpperCase() + p.health_status.slice(1)
+}
+
+function HealthTag({ p }: { p: Project }) {
+  const tone = p.health_status === 'down' ? 'red' : p.health_status === 'degraded' ? 'amber' : p.health_status === 'up' ? 'green' : 'zinc'
+  return <Badge tone={tone}>{healthLabel(p)}</Badge>
+}
+
+/** The project directory: search, filter by health, sort, and a grid or compact list. */
+export function ProjectsPage() {
   const { user, meta } = useAuth()
   const [projects, setProjects] = useState<Project[] | null>(null)
-  const [checks, setChecks] = useState<HealthCheck[]>([])
-  const [jobs, setJobs] = useState<Job[]>([])
-  const [expiring, setExpiring] = useState<Secret[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [health, setHealth] = useState<HealthFilter>('all')
+  const [sort, setSort] = useState<SortKey>('health')
+  const [view, setView] = useState<View>(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'
+    } catch {
+      return 'grid'
+    }
+  })
+  const scheduler = !!meta?.modules.scheduler
 
   const load = useCallback(() => {
     api<{ projects: Project[] }>('/api/projects')
-      .then((r) => setProjects(r.projects))
+      .then((r) => {
+        setProjects(r.projects)
+        setError(null)
+      })
       .catch((e) => setError(e.message))
-    api<{ checks: HealthCheck[] }>('/api/checks').then((r) => setChecks(r.checks)).catch(() => {})
-    if (meta?.modules.scheduler) {
-      api<{ jobs: Job[] }>('/api/jobs').then((r) => setJobs(r.jobs)).catch(() => {})
-    }
-    if (meta?.modules.vault) {
-      api<{ secrets: Secret[] }>('/api/secrets?expiring=30').then((r) => setExpiring(r.secrets)).catch(() => {})
-    }
-  }, [meta])
+  }, [])
 
   useEffect(() => {
     load()
@@ -72,118 +79,151 @@ export function DashboardPage() {
     return () => clearInterval(t)
   }, [load])
 
-  if (error) return <ErrorBox error={error} persistent />
+  const chooseView = (v: View) => {
+    setView(v)
+    try {
+      localStorage.setItem(VIEW_KEY, v)
+    } catch {
+      // not persisted — still applies now
+    }
+  }
+
+  const shown = useMemo(() => {
+    if (!projects) return []
+    const q = query.trim().toLowerCase()
+    const rows = projects.filter((p) => {
+      if (q && !`${p.name} ${p.key} ${p.description}`.toLowerCase().includes(q)) return false
+      if (health === 'failing') return p.failing_jobs > 0
+      if (health === 'all') return true
+      return p.health_status === health
+    })
+    return rows.sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name)
+      if (sort === 'recent') return b.created_at.localeCompare(a.created_at)
+      return SEVERITY[a.health_status] - SEVERITY[b.health_status] || b.failing_jobs - a.failing_jobs || a.name.localeCompare(b.name)
+    })
+  }, [projects, query, health, sort])
+
+  if (error && !projects) return <ErrorBox error={error} persistent />
   if (!projects) return <Spinner />
 
-  const active = checks.filter((c) => c.enabled)
-  const down = active.filter((c) => c.status === 'down')
-  const degraded = active.filter((c) => c.status === 'degraded')
-  const failingJobs = jobs.filter((j) => j.enabled && j.last_status === 'failed')
-
-  const items: AttentionItem[] = [
-    ...down.map((c): AttentionItem => ({
-      id: `d${c.id}`, tone: 'red', label: 'Down', title: c.name, to: `/checks/${c.id}`,
-      sub: `${scopeName(c)}${c.last_error ? ` · ${c.last_error}` : ''}${c.status_since ? ` · since ${timeAgo(c.status_since)}` : ''}`,
-    })),
-    ...degraded.map((c): AttentionItem => ({
-      id: `g${c.id}`, tone: 'amber', label: 'Degraded', title: c.name, to: `/checks/${c.id}`,
-      sub: `${scopeName(c)} · ${degradedReason(c)}`,
-    })),
-    ...failingJobs.map((j): AttentionItem => ({
-      id: `j${j.id}`, tone: 'red', label: 'Job failed', title: j.name, to: `/jobs/${j.id}`,
-      sub: `${scopeName(j)}${j.last_run_at ? ` · last run ${timeAgo(j.last_run_at)}` : ''}`,
-    })),
-    ...expiring.map((s): AttentionItem => ({
-      id: `s${s.id}`, tone: (s.days_left ?? 0) <= 7 ? 'red' : 'amber', label: 'Key expiring', title: s.name,
-      to: `/projects/${s.project_key}`, sub: `${scopeName(s)} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
-    })),
-  ]
-
-  const sorted = [...projects].sort(
-    (a, b) => SEVERITY[a.health_status] - SEVERITY[b.health_status] || b.failing_jobs - a.failing_jobs || a.name.localeCompare(b.name),
-  )
+  const filtering = query.trim() !== '' || health !== 'all'
 
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        subtitle={`${projects.length} project${projects.length === 1 ? '' : 's'} · ${active.length} health check${active.length === 1 ? '' : 's'}`}
+        title="Projects"
+        subtitle={`${projects.length} project${projects.length === 1 ? '' : 's'}`}
         actions={user && isAdmin(user.role) && <Link to="/projects/new"><Button>New project</Button></Link>}
       />
+      {error && <ErrorBox error={`Couldn't refresh: ${error}`} />}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Checks down" value={down.length} tone={down.length ? 'red' : undefined} />
-        <Stat label="Checks degraded" value={degraded.length} tone={degraded.length ? 'amber' : undefined} />
-        {meta?.modules.scheduler && <Stat label="Failing jobs" value={failingJobs.length} tone={failingJobs.length ? 'red' : undefined} />}
-        {meta?.modules.vault && <Stat label="Keys expiring (30 days)" value={expiring.length} tone={expiring.length ? 'amber' : undefined} />}
-      </div>
-
-      {projects.length > 0 &&
-        (items.length > 0 ? (
-          <Card className="mb-6 overflow-hidden">
-            <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Needs attention · {items.length}</div>
-            <ul className="divide-y divide-zinc-800/70">
-              {items.slice(0, 12).map((i) => (
-                <li key={i.id}>
-                  <Link to={i.to} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
-                    <span className="flex min-w-0 items-center gap-2.5">
-                      <Badge tone={i.tone}>{i.label}</Badge>
-                      <span className="min-w-0">
-                        <span className="text-zinc-100">{i.title}</span>
-                        <span className="ml-2 text-xs text-zinc-500">{i.sub}</span>
-                      </span>
-                    </span>
-                    {i.right}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-            {items.length > 12 && <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-500">…and {items.length - 12} more</div>}
-          </Card>
-        ) : (
-          <Card className="mb-6 flex items-center gap-3 px-4 py-3 text-sm text-zinc-300">
-            <StatusDot status="up" />
-            {active.length > 0 ? 'All clear — every check is up and nothing needs attention.' : 'Nothing needs attention. Add health checks to start monitoring your projects.'}
-          </Card>
-        ))}
+      {projects.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-48 flex-1 sm:max-w-xs">
+            <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-zinc-500"><NavIcon name="search" size={16} /></span>
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects" aria-label="Search projects" className="pl-8" />
+          </div>
+          <Select value={health} onChange={(e) => setHealth(e.target.value as HealthFilter)} aria-label="Filter by health" className="w-40">
+            <option value="all">All health</option>
+            <option value="down">Down</option>
+            <option value="degraded">Degraded</option>
+            <option value="up">Up</option>
+            <option value="none">No checks</option>
+            {scheduler && <option value="failing">Failing jobs</option>}
+          </Select>
+          <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort projects" className="w-40">
+            <option value="health">Sort: needs attention</option>
+            <option value="name">Sort: name</option>
+            <option value="recent">Sort: newest</option>
+          </Select>
+          <div className="ml-auto inline-flex overflow-hidden rounded-md border border-zinc-700" role="group" aria-label="Layout">
+            {(['grid', 'list'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => chooseView(v)}
+                aria-pressed={view === v}
+                aria-label={v === 'grid' ? 'Grid view' : 'List view'}
+                title={v === 'grid' ? 'Grid view' : 'List view'}
+                className={cx('px-2.5 py-2', view === v ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}
+              >
+                <NavIcon name={v} size={16} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {projects.length === 0 ? (
-        <Empty title="No projects yet">Create a project, then add health checks and keepalive jobs to it.</Empty>
-      ) : (
+        <Empty title="No projects yet">
+          {user && isAdmin(user.role)
+            ? 'Create a project, then add health checks and keepalive jobs to it.'
+            : 'Nothing has been shared with you yet. Ask an admin to give you access to a project.'}
+        </Empty>
+      ) : shown.length === 0 ? (
+        <Empty title={filtering ? 'No projects match' : 'No projects'}>
+          {filtering && (
+            <button className="text-emerald-400 hover:underline" onClick={() => { setQuery(''); setHealth('all') }}>Clear search and filters</button>
+          )}
+        </Empty>
+      ) : view === 'grid' ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {sorted.map((p) => (
+          {shown.map((p) => (
             <Link key={p.id} to={`/projects/${p.key}`}>
               <Card className="h-full p-4 transition hover:border-zinc-600">
                 <div className="flex items-center gap-2">
                   <StatusDot status={projectDot(p)} />
                   <span className="truncate font-medium text-zinc-100">{p.name}</span>
                 </div>
-                <div className="mt-1 text-xs text-zinc-500 mono">{p.key}</div>
+                <div className="mt-1 truncate text-xs text-zinc-500 mono">{p.key}</div>
                 {p.description && <p className="mt-2 line-clamp-2 text-sm text-zinc-400">{p.description}</p>}
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                  {p.health_status === 'down' && <Badge tone="red">down</Badge>}
-                  {p.health_status === 'degraded' && <Badge tone="amber">degraded</Badge>}
-                  {p.health_status === 'up' && <Badge tone="green">up</Badge>}
+                  <HealthTag p={p} />
                   <Badge>{p.check_count} check{p.check_count === 1 ? '' : 's'}</Badge>
-                  <Badge>{p.job_count} job{p.job_count === 1 ? '' : 's'}</Badge>
-                  {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} failing</Badge>}
+                  {scheduler && <Badge>{p.job_count} job{p.job_count === 1 ? '' : 's'}</Badge>}
+                  {scheduler && p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} failing</Badge>}
                 </div>
               </Card>
             </Link>
           ))}
         </div>
+      ) : (
+        <Card className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-left text-sm">
+            <thead className="border-b border-zinc-800 text-xs text-zinc-500">
+              <tr>
+                <th className="px-4 py-2 font-medium">Project</th>
+                <th className="px-4 py-2 font-medium">Health</th>
+                <th className="px-4 py-2 text-right font-medium">Checks</th>
+                {scheduler && <th className="px-4 py-2 text-right font-medium">Jobs</th>}
+                {scheduler && <th className="px-4 py-2 text-right font-medium">Failing</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {shown.map((p) => (
+                <tr key={p.id} className="hover:bg-zinc-800/30">
+                  <td className="max-w-[22rem] px-4 py-2">
+                    <Link to={`/projects/${p.key}`} className="block">
+                      <span className="flex items-center gap-2">
+                        <StatusDot status={projectDot(p)} />
+                        <span className="truncate text-zinc-100">{p.name}</span>
+                        <span className="truncate text-xs text-zinc-500 mono">{p.key}</span>
+                      </span>
+                      {p.description && <span className="mt-0.5 block truncate pl-[18px] text-xs text-zinc-500">{p.description}</span>}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2"><HealthTag p={p} /></td>
+                  <td className="px-4 py-2 text-right text-zinc-300">{p.check_count}</td>
+                  {scheduler && <td className="px-4 py-2 text-right text-zinc-300">{p.job_count}</td>}
+                  {scheduler && <td className={cx('px-4 py-2 text-right', p.failing_jobs > 0 ? 'text-red-400' : 'text-zinc-500')}>{p.failing_jobs}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
       )}
     </>
-  )
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'red' | 'amber' }) {
-  const color = tone === 'red' ? 'text-red-400' : tone === 'amber' ? 'text-amber-300' : 'text-zinc-100'
-  return (
-    <Card className="px-4 py-3">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
-    </Card>
   )
 }
 
@@ -212,7 +252,7 @@ export function ProjectNewPage() {
 
   return (
     <>
-      <PageHeader title="New project" />
+      <PageHeader title="New project" crumbs={[{ label: 'Projects', to: '/projects' }, { label: 'New project' }]} />
       <Card className="max-w-xl p-5">
         <form onSubmit={submit} className="space-y-4">
           <Field label="Name">
@@ -243,7 +283,7 @@ export function ProjectNewPage() {
           <ErrorBox error={error} />
           <div className="flex gap-2">
             <Button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create project'}</Button>
-            <Link to="/"><Button type="button" variant="ghost">Cancel</Button></Link>
+            <Link to="/projects"><Button type="button" variant="ghost">Cancel</Button></Link>
           </div>
         </form>
       </Card>
@@ -288,6 +328,13 @@ export function ProjectDetailPage() {
     load()
   }, [load])
 
+  // Breadcrumb links such as /projects/x#checks scroll to that section once the page has loaded.
+  const { hash } = useLocation()
+  const ready = !!project && !!services
+  useEffect(() => {
+    if (ready && hash) document.getElementById(hash.slice(1))?.scrollIntoView()
+  }, [ready, hash])
+
   if (error) return <ErrorBox error={error} persistent />
   if (!project || !services) return <Spinner />
 
@@ -295,7 +342,7 @@ export function ProjectDetailPage() {
     if (!confirm(`Delete project "${project.name}" with all its health checks, jobs and secrets? This cannot be undone.`)) return
     try {
       await api(`/api/projects/${project.key}`, { method: 'DELETE' })
-      navigate('/')
+      navigate('/projects')
     } catch (e) {
       setError((e as Error).message)
     }
@@ -304,6 +351,7 @@ export function ProjectDetailPage() {
   return (
     <>
       <PageHeader
+        crumbs={[{ label: 'Projects', to: '/projects' }, { label: project.name }]}
         title={project.name}
         subtitle={<span className="mono">{project.key}{project.owner_only && <span className="ml-2 rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}</span>}
         actions={
@@ -352,7 +400,7 @@ export function ProjectDetailPage() {
       {accessOpen && <ProjectAccessModal project={project} onClose={() => setAccessOpen(false)} onChanged={load} />}
 
       {meta?.modules.scheduler && (
-        <section className="mt-8">
+        <section id="jobs" className="mt-8 scroll-mt-6">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-medium text-zinc-200">Jobs</h2>
             {writable && (

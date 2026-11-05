@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, isAdmin, type User } from '../api'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { api } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, ErrorBox, Input, PageHeader } from '../ui'
-import { TwoFactorEnroll } from './auth'
+import { Badge, Card, ErrorBox, PageHeader, Spinner, Tabs } from '../ui'
 
 interface InstanceSettings {
   company_name: string
@@ -12,165 +12,155 @@ interface InstanceSettings {
   smtp?: { configured: boolean; host: string }
 }
 
+type Tab = 'general' | 'modules' | 'security' | 'notifications' | 'backups'
+
+/**
+ * App-wide configuration. Today every one of these values is set on the server (env vars, see
+ * plan.md §3), so this page shows them read-only and says so. Personal settings live in Profile.
+ */
 export function SettingsPage() {
-  const { user, meta, setSession } = useAuth()
+  const { meta } = useAuth()
+  const [params, setParams] = useSearchParams()
   const [instance, setInstance] = useState<InstanceSettings | null>(null)
-  const [enrolling, setEnrolling] = useState(false)
-  const [disableCode, setDisableCode] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (user && isAdmin(user.role)) {
-      api<InstanceSettings>('/api/settings').then(setInstance).catch((e) => setError(e.message))
-    }
-  }, [user])
+    api<InstanceSettings>('/api/settings').then(setInstance).catch((e) => setError(e.message))
+  }, [])
 
-  if (!user) return null
-  const twoFARequired = meta?.two_fa_mode === 'required' || (meta?.two_fa_mode === 'admins' && isAdmin(user.role))
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'general', label: 'General' },
+    { id: 'modules', label: 'Modules' },
+    { id: 'security', label: 'Security policy' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'backups', label: 'Backups' },
+  ]
+  const requested = params.get('tab')
+  const tab: Tab = tabs.some((t) => t.id === requested) ? (requested as Tab) : 'general'
 
-  const disable2FA = async (e: FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    try {
-      const r = await api<{ user: User }>('/api/auth/2fa/disable', { method: 'POST', body: { code: disableCode } })
-      setSession({ user: r.user, next: 'ok' })
-      setDisableCode('')
-    } catch (err) {
-      setError((err as Error).message)
-    }
-  }
+  if (error && !instance) return <ErrorBox error={error} persistent />
+  if (!instance || !meta) return <Spinner />
+
+  const t = instance.toggles
+  const val = (k: string, fallback = '—') => t[k] ?? fallback
 
   return (
     <>
-      <PageHeader title="Settings" />
-      <ErrorBox error={error} />
+      <PageHeader title="Settings" subtitle={<>App-wide configuration. Your own password, 2FA and display options are in <Link to="/profile" className="text-emerald-400 hover:underline">Profile</Link>.</>} />
+      <Tabs tabs={tabs} value={tab} onChange={(id) => setParams(id === 'general' ? {} : { tab: id }, { replace: true })} label="Settings sections" />
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="max-w-2xl space-y-4">
+        <ManagedNote />
 
-      <section className="mt-4 max-w-2xl">
-        <h2 className="mb-3 font-medium text-zinc-200">Your account</h2>
-        <Card className="divide-y divide-zinc-800">
-          <Row label="Name" value={user.name} />
-          <Row label="Email" value={user.email} />
-          <Row label="Role" value={<Badge tone="green">{user.role}</Badge>} />
-          <div className="px-4 py-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-400">Two-factor authentication</span>
-              {user.totp_enabled ? <Badge tone="green">enabled</Badge> : <Badge tone="amber">off</Badge>}
-            </div>
-            {!user.totp_enabled && meta?.two_fa_mode !== 'off' && (
-              <div className="mt-3">
-                {enrolling ? (
-                  <div className="max-w-sm">
-                    <TwoFactorEnroll
-                      onDone={(s) => {
-                        setSession(s)
-                        setEnrolling(false)
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <Button variant="secondary" onClick={() => setEnrolling(true)}>Set up 2FA</Button>
-                )}
-              </div>
-            )}
-            {user.totp_enabled && !twoFARequired && (
-              <form onSubmit={disable2FA} className="mt-3 flex max-w-sm gap-2">
-                <Input value={disableCode} onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Current 6-digit code" className="mono" />
-                <Button type="submit" variant="danger" disabled={disableCode.length !== 6}>Disable</Button>
-              </form>
-            )}
-            {user.totp_enabled && twoFARequired && <p className="mt-2 text-xs text-zinc-500">2FA is required for your role on this instance.</p>}
-          </div>
-        </Card>
-      </section>
-
-      <SecuritySection />
-
-      {instance && (
-        <section className="mt-8 max-w-2xl">
-          <h2 className="mb-1 font-medium text-zinc-200">Instance</h2>
-          <p className="mb-3 text-sm text-zinc-500">
-            Toggles are set with env vars and are read-only here. Change them in <code>.env</code> and restart Rexus.
-          </p>
+        {tab === 'general' && (
           <Card className="divide-y divide-zinc-800">
-            <Row label="Company" value={instance.company_name} />
-            <Row label="Base URL" value={<span className="mono">{instance.base_url}</span>} />
-            <Row label="Powered by" value={<span>Rexus <span className="mono text-zinc-500">{instance.version}</span></span>} />
-            <Row
-              label="Email (SMTP)"
-              value={instance.smtp?.configured ? <span className="mono">{instance.smtp.host}</span> : <span className="text-zinc-500">not set up</span>}
-            />
-            {Object.entries(instance.toggles)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([k, v]) => (
-                <Row key={k} label={<span className="mono text-xs">{k}</span>} value={<span className="mono">{v}</span>} />
-              ))}
+            <Row label="Company name" help="REXUS_COMPANY_NAME" value={instance.company_name} />
+            <Row label="Public URL" help="REXUS_BASE_URL" value={<span className="mono">{instance.base_url}</span>} />
+            <Row label="Environment" help="REXUS_ENV" value={val('REXUS_ENV')} />
+            <Row label="Version" value={<span className="mono">{instance.version}</span>} managed={false} />
           </Card>
-        </section>
-      )}
+        )}
+
+        {tab === 'modules' && (
+          <Card className="divide-y divide-zinc-800">
+            <Row label="Vault" help="REXUS_MODULE_VAULT" value={<OnOff on={meta.modules.vault} />} />
+            <Row label="Jobs (scheduler)" help="REXUS_MODULE_SCHEDULER" value={<OnOff on={meta.modules.scheduler} />} />
+            <Row label="Backups" help="REXUS_BACKUP_ENABLED" value={<OnOff on={meta.backup_enabled} />} />
+          </Card>
+        )}
+
+        {tab === 'security' && (
+          <Card className="divide-y divide-zinc-800">
+            <Row
+              label="Two-factor requirement"
+              help="REXUS_2FA_MODE"
+              value={TWO_FA[meta.two_fa_mode] ?? meta.two_fa_mode}
+            />
+            <Row
+              label="Owner-only sign-in (lockdown)"
+              help="REXUS_LOGIN_OWNER_ONLY"
+              value={<OnOff on={val('REXUS_LOGIN_OWNER_ONLY', 'false') === 'true'} />}
+            />
+            <Row
+              label="Allowed IP addresses"
+              help="REXUS_IP_ALLOWLIST"
+              value={ipValue(val('REXUS_IP_ALLOWLIST', ''))}
+            />
+          </Card>
+        )}
+
+        {tab === 'notifications' && (
+          <>
+            <Card className="divide-y divide-zinc-800">
+              <Row
+                label="Email (SMTP)"
+                help="REXUS_SMTP_*"
+                value={instance.smtp?.configured ? <span className="mono">{instance.smtp.host}</span> : <span className="text-zinc-500">not set up</span>}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+                <div>
+                  <div className="text-zinc-200">Alert channels and events</div>
+                  <div className="text-xs text-zinc-500">Telegram, Slack, Discord and email channels, and which events send alerts.</div>
+                </div>
+                <Link to="/alerts" className="text-emerald-400 hover:underline">Open Alerts</Link>
+              </div>
+            </Card>
+          </>
+        )}
+
+        {tab === 'backups' && (
+          <Card className="divide-y divide-zinc-800">
+            <Row label="Backups" help="REXUS_BACKUP_ENABLED" value={<OnOff on={meta.backup_enabled} />} />
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+              <div>
+                <div className="text-zinc-200">Schedule, retention and history</div>
+                <div className="text-xs text-zinc-500">
+                  {meta.backup_enabled ? 'Edited on the Backups page, which is the one place for these settings.' : 'Turn backups on in .env (REXUS_BACKUP_ENABLED and REXUS_BACKUP_DIR), then restart Rexus.'}
+                </div>
+              </div>
+              {meta.backup_enabled && <Link to="/backups" className="text-emerald-400 hover:underline">Open Backups</Link>}
+            </div>
+          </Card>
+        )}
+      </div>
     </>
   )
 }
 
-function SecuritySection() {
-  const { setSession } = useAuth()
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [confirmPw, setConfirmPw] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [ok, setOk] = useState(false)
-  const [busy, setBusy] = useState(false)
+const TWO_FA: Record<string, string> = {
+  required: 'Required for everyone',
+  admins: 'Required for owner and admins',
+  optional: 'Optional — each person chooses',
+  off: 'Off',
+}
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setOk(false)
-    if (next !== confirmPw) return setError("New passwords don't match")
-    setBusy(true)
-    try {
-      await api('/api/auth/password', { method: 'POST', body: { current_password: current, new_password: next } })
-      setCurrent('')
-      setNext('')
-      setConfirmPw('')
-      setOk(true)
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+function ipValue(v: string): ReactNode {
+  if (v === '' || v === '0.0.0.0') return 'Anyone (no restriction)'
+  return <span className="mono">{v}</span>
+}
 
-  const logoutAll = async () => {
-    if (!confirm('Log out of Rexus on all your devices, including this one?')) return
-    await api('/api/auth/logout-all', { method: 'POST' }).catch(() => {})
-    setSession(null)
-  }
-
+function ManagedNote() {
   return (
-    <section className="mt-8 max-w-2xl">
-      <h2 className="mb-3 font-medium text-zinc-200">Security</h2>
-      <Card className="p-4">
-        <form onSubmit={submit} className="max-w-sm space-y-3">
-          <div className="text-sm font-medium text-zinc-300">Change password</div>
-          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} placeholder="Current password" autoComplete="current-password" required />
-          <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="New password (10+ characters)" autoComplete="new-password" minLength={10} required />
-          <Input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} placeholder="Repeat new password" autoComplete="new-password" required />
-          <ErrorBox error={error} />
-          {ok && <div className="text-sm text-emerald-400">Password changed. Your other devices were logged out.</div>}
-          <Button type="submit" variant="secondary" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</Button>
-        </form>
-        <div className="mt-5 border-t border-zinc-800 pt-4">
-          <Button variant="secondary" onClick={logoutAll}>Log out of all devices</Button>
-        </div>
-      </Card>
-    </section>
+    <p className="text-sm text-zinc-400">
+      These are set on the server in the <code>.env</code> file, so they can't be changed from here. After editing <code>.env</code>, restart Rexus for the change to take effect.
+    </p>
   )
 }
 
-function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
+function OnOff({ on }: { on: boolean }) {
+  return on ? <Badge tone="green">On</Badge> : <Badge>Off</Badge>
+}
+
+function Row({ label, value, help, managed = true }: { label: string; value: ReactNode; help?: string; managed?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-      <span className="text-zinc-400">{label}</span>
-      <span className="truncate text-right text-zinc-200">{value}</span>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm">
+      <div className="min-w-0">
+        <div className="text-zinc-200">{label}</div>
+        {help && <div className="mono text-xs text-zinc-500">{help}</div>}
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="min-w-0 break-words text-right text-zinc-200">{value}</span>
+        {managed && <span className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">Managed on server</span>}
+      </div>
     </div>
   )
 }

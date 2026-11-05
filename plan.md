@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–7 + services built.** Phases 9 (deploy tokens) and 10 (project access per user) are built. Open: Cloudflare Access (Phase 8, optional); see §13.
+Status: **Phases 1–7 + services built.** Phases 9 (deploy tokens), 10 (project access per user) and 11 (UI/UX upgrade) are built. Open: Cloudflare Access (Phase 8, optional). Deployment secret sync is future (Phase 12); see §13.
 
 ---
 
@@ -440,7 +440,7 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 **Built:** Phases 1–7 (foundation + keepalive jobs, Vault, team, health checks + dashboard, alerts, backups, read-only API) and optional **services** per project. How they work is in the README and in §1–12 above; the detailed build notes are in git history.
 
-**Built since:** Phase 9 (deploy tokens) and Phase 10 (project access per user). **Open:** Phase 8's Cloudflare Access (optional). Phase 11 (Rexus pushes secrets into deployments) is future.
+**Built since:** Phase 9 (deploy tokens), Phase 10 (project access per user) and Phase 11 (UI/UX upgrade). **Open:** Phase 8's Cloudflare Access (optional). Phase 12 (Rexus pushes secrets into deployments) is future.
 
 ### Phase 8 — Public HTTPS address with Cloudflare Tunnel
 
@@ -572,7 +572,70 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 
 **Order:** after Phase 9. Phase 9's "who can create deploy tokens" check gains the project-access check here.
 
-### Phase 11 — Rexus updates secrets in deployments (future)
+### Phase 11 — UI/UX upgrade ✅ built
+> Built Nov 2026, frontend only (no migration, no API change). Notes: Dashboard (`/`) is now the operational overview — KPI cards, Needs attention, a health table, project filter, manual + 30s refresh; each section loads on its own, so a failed one shows "unavailable" or a warning and never turns into zeros or "All clear". Projects (`/projects`) is the directory with search, health filter, sort and grid/list. `/profile` holds Account, Security (password, 2FA, sign out everywhere) and Preferences. `/settings` (owner/admin only) shows server-managed configuration read-only, labelled "Managed on server"; alerts and backup settings link to their existing pages instead of being copied. Preferences (theme dark/light/system, density, timezone, date format) are stored **in the browser** (localStorage), not on the server — they don't follow the account to another device. The light theme re-maps the existing colour variables in `index.css`. Sidebar: grouped Workspace / Administration, outline icons, profile row, mobile drawer with Escape and focus handling. Verified in the browser (dark, light, compact, mobile, timezone change, reload persistence). Not done: server-side saved preferences, editable app settings, historical charts, and the keyboard/contrast pass was only a visual check.
+
+**Goal:** Dashboard shows operational health across accessible projects; Projects manages projects; Settings contains app-wide configuration; Profile contains personal account controls. Polish the navigation and shared visual design while preserving existing permissions and functionality.
+
+**1. Dashboard — operational overview (`/`)**
+- Move the project-card directory and **New project** action to Projects.
+- Show KPI cards for healthy/total enabled checks, down checks, degraded checks, failing jobs, and secrets expiring within 30 days. Hide module-specific cards when that module is disabled.
+- Keep **Needs attention**, ordered by severity, with direct links to the relevant check, job, or secret context.
+- Add a health overview table: check name, project, status, latest response time, 24-hour uptime, and last checked time. Start with existing check data; do not label a current snapshot as a historical metric.
+- Add a project filter, manual refresh, and last-updated indicator alongside automatic refresh. All project-scoped cards and lists follow the selected filter and the user's project access.
+- Show last successful backup and backup failures only when backups are enabled and the user is permitted to see them; identify this as instance-wide status.
+- Distinguish healthy, unknown, stale, paused, empty, and unavailable states. Failed requests must not silently become zero counts or an **All clear** message. Keep partial results useful and identify sections that failed to refresh.
+- Defer historical aggregate charts and time-range reporting until reliable backend aggregation and metric definitions exist.
+
+**2. Projects — dedicated directory (`/projects`)**
+- Reuse the existing project cards and creation flow, adding search, health filters, sorting, and a compact list/grid switch.
+- Show each project's description, health status, check count, job count, and failures. Preserve module visibility rules.
+- Keep existing project detail URLs (`/projects/:key`) working. Project navigation, creation cancellation, and deletion return to Projects where appropriate.
+- Keep project creation and structure/access management restricted to the existing authorized roles.
+
+**3. Profile — personal account area (`/profile`)**
+- Make the bottom sidebar profile row clickable and provide an equally accessible entry on mobile.
+- **Account:** name, email, and role; preserve current read-only behavior unless editing is separately supported.
+- **Security:** move password changes, personal 2FA enrollment/disable, and sign out of all devices out of Settings. Preserve required-2FA policy enforcement.
+- **Preferences:** add saved theme (dark/light/system), density, timezone, and date-format choices. These are personal preferences, not global app settings. Define persistence and defaults before implementation; use system timezone/date conventions initially and preserve the current dark appearance by default.
+- Keep sign out readily available from the profile area.
+
+**4. Settings — app configuration (`/settings`, Owner/Admin)**
+- Replace the mixed account/instance page with grouped tabs or sections, clear descriptions, friendly labels, and save/error feedback for editable settings.
+- **General:** company/app name, public URL, and version.
+- **Modules:** Vault, Jobs, and Backups availability.
+- **Security policy:** app-wide 2FA requirements, login restrictions, and IP rules. Personal 2FA controls remain in Profile.
+- **Notifications:** shared alert channels and delivery configuration, reusing the existing alert functionality.
+- **Backups:** schedule and retention, reusing existing backup settings. The dedicated Backups page remains the place for operational history/actions; Alerts remains the place for alert activity. Link to one canonical configuration form rather than duplicating it.
+- Respect §3: infrastructure, secrets, and feature toggles remain server-configured initially. Clearly mark them **Managed on server**, show readable values/status, and explain when a restart is needed. Never present a nonfunctional editable switch or expose configuration secrets.
+- Useful follow-on settings: default check intervals/timeouts, expiry-warning thresholds, and data retention. Reuse existing controls where supported; new defaults or writable instance settings require explicit backend validation, persistence, authorization, and audit coverage. Do not imply these are already supported.
+
+**5. Sidebar and shared visual polish**
+- **Workspace:** Dashboard, Projects, Vault, Jobs.
+- **Administration:** Alerts, API & integrations, Users, Audit log, Backups.
+- **Bottom:** Settings and a profile row with avatar/initials, name, and role. Administration and module entries remain conditional on permissions and enabled features.
+- Use a consistent outline icon set (18–20px), approximately 240px sidebar width, 40–44px navigation rows, 14px medium-weight labels, and quiet group captions.
+- Use a subtle emerald active state, consistent hover states, and visible keyboard focus. Icons supplement text labels; statuses must not rely on color alone.
+- Retain the dark palette and emerald accent while improving muted-text contrast, heading hierarchy, card/form spacing, and shared component consistency. Apply equivalent contrast and state styling when adding light/system themes.
+- Keep navigation scrollable without overlapping the bottom profile area. Use an accessible mobile drawer with Settings and Profile available; support keyboard navigation, focus handling, and narrow screens.
+
+**Implementation order**
+1. Split Dashboard/Projects and Settings/Profile; update routes, links, and permission guards.
+2. Polish the sidebar and shared typography, cards, forms, and interaction states.
+3. Build the health-focused dashboard from existing data, including reliable loading/error/unknown states.
+4. Add persisted personal preferences. Treat additional backend-dependent settings and historical reporting as separately scoped follow-ons.
+
+**Verification / done when**
+- Dashboard answers what is healthy and what needs attention; Projects is the dedicated project directory; personal controls exist in Profile; Settings contains only app configuration.
+- KPI counts, filters, attention links, and refresh states reflect real accessible data. Unknown or failed loads never produce a false healthy summary.
+- Owner, Admin, Contributor, and Viewer flows preserve project visibility and existing authorization; direct routes are guarded as well as sidebar links.
+- Disabled modules, no projects/checks, partial request failures, stale results, and long names render correctly.
+- Existing project/check/job links and account-security actions still work. Server-managed settings are clearly distinguished from editable controls, and saved preferences persist at their documented scope.
+- Desktop and mobile layouts, keyboard focus, readable contrast, and navigation scrolling are verified. Run frontend type checking/build and targeted behavior tests for routing, data states, permissions, and any new persistence.
+
+**Order:** next implementation phase after Phase 10; independent of optional Cloudflare Access work. Deployment secret sync remains future work in Phase 12.
+
+### Phase 12 — Rexus updates secrets in deployments (future)
 
 When a secret changes in the Vault, Rexus pushes it into the deployment's platform env vars (e.g. Vercel, Render, Railway, GitHub Actions secrets) and optionally triggers a redeploy. Platform API keys stored encrypted in the Vault. Not designed yet — decide platforms first.
 

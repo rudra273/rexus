@@ -92,7 +92,7 @@ Open a project and click **Add check** to watch a URL. Each check is configured 
 
 A check is 🟢 **Up**, 🟡 **Degraded** (slow, or SSL expiring), or 🔴 **Down**. A project shows the worst status among its enabled checks. Each check page has a response-time chart (1 hour to 30 days), uptime for 24 hours / 7 days / 30 days, the SSL expiry date, and a list of status changes with the reason.
 
-The **Dashboard** lists everything that needs attention across all projects — checks that are down or degraded, failed jobs, and keys about to expire — with the most serious projects first. Probe results are kept for 30 days.
+The **Dashboard** shows what is healthy and what needs attention across the projects you can see — check, job and key-expiry counts, a health table, and a project filter. A section that fails to load says so instead of showing zeros. The **Projects** page is the directory (search, health filter, grid or list). Probe results are kept for 30 days.
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
@@ -275,12 +275,12 @@ Roles say what a person can *do*; **project access** says which projects they ca
 - Role changes and disabling take effect on the very next request; disabling logs the person out immediately.
 - A **password-reset link** is one-time and expires in 24 hours; using it logs the user out everywhere. **Reset 2FA** forces them to enrol again at next login.
 - Invite links expire after 7 days and only work once. Only a hash of each link is stored, so a link can't be shown again — use **New link** to replace it. If email is set up (see **Alerts**) the link is also emailed to them; otherwise you share it yourself.
-- Everyone can change their own password and **log out of all devices** from **Settings**.
+- Everyone can change their own password and **log out of all devices** from **Profile** (click your name at the bottom of the sidebar). Profile also holds display preferences — theme (dark, light or system), density, timezone and date format — which are saved in your browser only.
 - The **Audit log** (owner and admins) records logins, secret reveals and copies, and every change — secret values are never written to it.
 
 ## Configuration
 
-Everything is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error. Toggles are shown read-only in **Settings**.
+Everything is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error. Toggles are shown read-only in **Settings** (owner and admin), marked *Managed on server*.
 
 **IP allowlist.** `REXUS_IP_ALLOWLIST` takes comma-separated IPs or ranges, e.g. `203.0.113.5,10.0.0.0/8`; `0.0.0.0` allows everyone. Localhost is always allowed. Behind a tunnel or proxy on the same machine, Rexus reads the visitor's real IP from the `CF-Connecting-IP` or `X-Forwarded-For` header — but only when the connection itself comes from a local or private address, so a direct connection from the internet can't fake it. **Docker Desktop (Mac/Windows) hides real client IPs** (everything appears to come from Docker's own gateway), so the allowlist only works there when a tunnel/proxy supplies the header; on a Linux server it sees the true address.
 

@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+
+import { Link } from 'react-router-dom'
+import { formatDateTime } from './prefs'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
@@ -89,7 +92,7 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
   const styles: Record<Variant, string> = {
-    primary: 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400',
+    primary: 'bg-emerald-500 text-[#052e16] hover:bg-emerald-400',
     secondary: 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700',
     danger: 'bg-red-600/90 text-white hover:bg-red-500',
     ghost: 'text-zinc-300 hover:bg-zinc-800',
@@ -177,14 +180,76 @@ export function ErrorBox({ error, persistent }: { error: string | null; persiste
   )
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode }) {
+/** Accessible tab bar (arrow keys move between tabs). The caller renders the active panel. */
+export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void; label: string }) {
+  const onKey = (e: ReactKeyboardEvent, i: number) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+    e.preventDefault()
+    const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
+    onChange(next.id)
+    document.getElementById(`tab-${next.id}`)?.focus()
+  }
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div role="tablist" aria-label={label} className="mb-6 flex gap-1 overflow-x-auto border-b border-zinc-800">
+      {tabs.map((t, i) => (
+        <button
+          key={t.id}
+          id={`tab-${t.id}`}
+          role="tab"
+          type="button"
+          aria-selected={value === t.id}
+          aria-controls={`panel-${t.id}`}
+          tabIndex={value === t.id ? 0 : -1}
+          onClick={() => onChange(t.id)}
+          onKeyDown={(e) => onKey(e, i)}
+          className={cx(
+            '-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-medium',
+            value === t.id ? 'border-emerald-500 text-zinc-50' : 'border-transparent text-zinc-400 hover:text-zinc-200',
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export interface Crumb {
+  label: string
+  to?: string
+}
+
+/** "Projects › vidyakalp › Health checks › Render" — every part but the last is a link back. */
+export function Breadcrumbs({ items }: { items: Crumb[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="mb-2 min-w-0">
+      <ol className="flex flex-wrap items-center gap-1.5 text-sm text-zinc-500">
+        {items.map((c, i) => (
+          <li key={i} className="flex min-w-0 items-center gap-1.5">
+            {i > 0 && <span aria-hidden="true" className="text-zinc-600">›</span>}
+            {c.to && i < items.length - 1 ? (
+              <Link to={c.to} className="truncate hover:text-zinc-200 hover:underline">{c.label}</Link>
+            ) : (
+              <span aria-current={i === items.length - 1 ? 'page' : undefined} className="truncate text-zinc-300">{c.label}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  )
+}
+
+export function PageHeader({ title, subtitle, actions, crumbs }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode; crumbs?: Crumb[] }) {
+  return (
+    <div className="mb-6">
+      {crumbs && <Breadcrumbs items={crumbs} />}
+      <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
         <h1 className="text-xl font-semibold text-zinc-50">{title}</h1>
         {subtitle && <div className="mt-1 text-sm text-zinc-400">{subtitle}</div>}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      </div>
     </div>
   )
 }
@@ -252,7 +317,7 @@ export function timeAgo(iso: string | null): string {
 
 export function fmtTime(iso: string | null): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString()
+  return formatDateTime(iso)
 }
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle?: ReactNode; children: ReactNode }) {

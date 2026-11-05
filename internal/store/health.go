@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -345,6 +346,7 @@ type SeriesBucket struct {
 	T     time.Time `json:"t"`
 	AvgMS *float64  `json:"avg_ms"`
 	MaxMS *int      `json:"max_ms"`
+	MinMS *int      `json:"min_ms"`
 	OK    int       `json:"ok"`
 	Fail  int       `json:"fail"`
 }
@@ -354,7 +356,7 @@ type SeriesBucket struct {
 func (s *Store) CheckSeries(ctx context.Context, checkID string, window, bucket time.Duration) ([]*SeriesBucket, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT
 			to_timestamp(floor(extract(epoch FROM checked_at) / $2::float8) * $2::float8) AS t,
-			avg(response_ms)::float8, max(response_ms),
+			avg(response_ms)::float8, max(response_ms), min(response_ms),
 			count(*) FILTER (WHERE ok), count(*) FILTER (WHERE NOT ok)
 		FROM health_results
 		WHERE check_id = $1 AND checked_at > now() - make_interval(secs => $3::float8)
@@ -366,10 +368,40 @@ func (s *Store) CheckSeries(ctx context.Context, checkID string, window, bucket 
 	out := []*SeriesBucket{}
 	for rows.Next() {
 		b := &SeriesBucket{}
-		if err := rows.Scan(&b.T, &b.AvgMS, &b.MaxMS, &b.OK, &b.Fail); err != nil {
+		if err := rows.Scan(&b.T, &b.AvgMS, &b.MaxMS, &b.MinMS, &b.OK, &b.Fail); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// AllChecksSeries is CheckSeries for every check the viewer can see, keyed by check ID
+// (for the dashboard). Checks with no results in the window are absent.
+func (s *Store) AllChecksSeries(ctx context.Context, a Access, window, bucket time.Duration) (map[string][]*SeriesBucket, error) {
+	var b filterBuilder
+	b.add("r.checked_at > now() - make_interval(secs => ?::float8)", window.Seconds())
+	b.access("c.project_id", a)
+	args := append(b.args, bucket.Seconds())
+	n := len(args)
+	rows, err := s.Pool.Query(ctx, fmt.Sprintf(`SELECT r.check_id,
+			to_timestamp(floor(extract(epoch FROM r.checked_at) / $%[1]d::float8) * $%[1]d::float8) AS t,
+			avg(r.response_ms)::float8, max(r.response_ms), min(r.response_ms),
+			count(*) FILTER (WHERE r.ok), count(*) FILTER (WHERE NOT r.ok)
+		FROM health_results r JOIN health_checks c ON c.id = r.check_id`+b.sql()+`
+		GROUP BY 1, 2 ORDER BY 1, 2`, n), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]*SeriesBucket{}
+	for rows.Next() {
+		var id string
+		bk := &SeriesBucket{}
+		if err := rows.Scan(&id, &bk.T, &bk.AvgMS, &bk.MaxMS, &bk.MinMS, &bk.OK, &bk.Fail); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], bk)
 	}
 	return out, rows.Err()
 }

@@ -331,3 +331,27 @@ func (s *Server) handleCheckSeries(w http.ResponseWriter, r *http.Request, a *au
 		"buckets":        buckets,
 	})
 }
+
+// handleAllChecksSeries returns the response-time/uptime series of every visible check, for the dashboard.
+func (s *Server) handleAllChecksSeries(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "24h"
+	}
+	spec, ok := seriesRanges[rng]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "range must be 1h, 6h, 24h, 7d or 30d")
+		return
+	}
+	series, err := s.store.AllChecksSeries(r.Context(), s.access(r), spec[0], spec[1])
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"range":          rng,
+		"window_seconds": int(spec[0].Seconds()),
+		"bucket_seconds": int(spec[1].Seconds()),
+		"series":         series,
+	})
+}

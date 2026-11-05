@@ -162,6 +162,7 @@ export interface SeriesBucket {
   t: string
   avg_ms: number | null
   max_ms: number | null
+  min_ms: number | null
   ok: number
   fail: number
 }
