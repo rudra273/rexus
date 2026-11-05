@@ -236,7 +236,7 @@ function CreateDeployTokenModal({
   )
 }
 
-function CopyBlock({ text, label }: { text: string; label: string }) {
+function CopyBlock({ text, label, tall }: { text: string; label: string; tall?: boolean }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
@@ -253,12 +253,93 @@ function CopyBlock({ text, label }: { text: string; label: string }) {
         <span>{label}</span>
         <button type="button" className="text-zinc-400 hover:text-zinc-200" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
       </div>
-      <pre className="overflow-x-auto rounded bg-zinc-900 p-3 text-xs text-zinc-300 mono">{text}</pre>
+      <pre className={cx('overflow-x-auto rounded bg-zinc-900 p-3 text-xs text-zinc-300 mono', tall && 'max-h-72 overflow-y-auto whitespace-pre-wrap')}>{text}</pre>
     </div>
   )
 }
 
+type ConnectTab = 'node' | 'python' | 'shell' | 'ai'
+
+const TABS: { id: ConnectTab; label: string }[] = [
+  { id: 'node', label: 'Node.js' },
+  { id: 'python', label: 'Python' },
+  { id: 'shell', label: 'Shell' },
+  { id: 'ai', label: 'AI prompt' },
+]
+
+// Small, dependency-free snippets. They send a User-Agent because some proxies
+// (Cloudflare among them) reject the default one of Python's urllib.
+const NODE_SNIPPET = `// rexus-env.js — loads this app's secrets from Rexus once, at startup.
+// Needs Node 18+ (built-in fetch). Set REXUS_URL and REXUS_TOKEN in your platform.
+async function loadRexusEnv() {
+  const res = await fetch(process.env.REXUS_URL + '/api/v1/env?format=json', {
+    headers: { Authorization: 'Bearer ' + process.env.REXUS_TOKEN, 'User-Agent': 'rexus-client' },
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!res.ok) throw new Error('Rexus env fetch failed: HTTP ' + res.status) // never start without secrets
+  Object.assign(process.env, await res.json())
+}
+module.exports = { loadRexusEnv }
+
+// In your entry file, before anything reads process.env:
+//   const { loadRexusEnv } = require('./rexus-env')
+//   loadRexusEnv().then(() => require('./server'))`
+
+const PYTHON_SNIPPET = `# rexus_env.py — loads this app's secrets from Rexus once, at startup.
+# Standard library only. Set REXUS_URL and REXUS_TOKEN in your platform.
+import json, os, urllib.request
+
+def load_rexus_env():
+    req = urllib.request.Request(
+        os.environ["REXUS_URL"] + "/api/v1/env?format=json",
+        headers={"Authorization": "Bearer " + os.environ["REXUS_TOKEN"], "User-Agent": "rexus-client"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:  # raises on any error: never start without secrets
+        os.environ.update(json.load(r))
+
+# At the very top of your entry file, before anything reads os.environ:
+#   from rexus_env import load_rexus_env
+#   load_rexus_env()`
+
+const SHELL_SNIPPET = `curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" "$REXUS_URL/api/v1/env" > .env && node server.js
+
+# -f makes the start fail if Rexus can't be reached. Swap "node server.js" for your own start command.`
+
+function aiPrompt(meta: ApiToken, url: string) {
+  const where = [meta.project, meta.environment, meta.service].filter(Boolean).join(' / ')
+  return `Connect this project to Rexus, my self-hosted secrets manager, so the app loads its environment variables when it starts.
+
+Rexus gives me two environment variables. I will set them in my deployment platform, so do not hardcode them or ask me to paste the token here:
+- REXUS_URL = ${url}
+- REXUS_TOKEN = a deploy token (starts with rxt_)
+
+How the API works:
+GET {REXUS_URL}/api/v1/env?format=json
+Header: Authorization: Bearer {REXUS_TOKEN}
+It returns one flat JSON object of this app's secrets, e.g. {"DATABASE_URL": "...", "STRIPE_KEY": "..."}. This token covers: ${where}. Without ?format=json it returns a .env file instead.
+
+What to do:
+1. Work out this project's language and framework.
+2. Add a small startup step that calls the endpoint once, before anything reads configuration, and puts the values into the process environment (or the app's config).
+3. Fail fast with a clear error if the request fails (network error, non-200, timeout around 10 seconds). Never start the app without its secrets. Send a User-Agent header (some proxies block the default one).
+4. Never log or print secret values. Never write them to disk, commit them, or bake them into a Docker image, a build step or a frontend bundle. Fetch at startup (runtime) only, in server-side code.
+5. Keep local development working: if REXUS_TOKEN is not set, skip the fetch and use the existing .env or config.
+6. Change nothing else. When done, list the environment variables I must set in my deployment platform.`
+}
+
 function DeployTokenShownModal({ token, meta, url, onClose }: { token: string; meta: ApiToken; url: string; onClose: () => void }) {
+  const [tab, setTab] = useState<ConnectTab>('node')
+  const body: Record<ConnectTab, { label: string; text: string; note: string }> = {
+    node: { label: 'Add this file, and call it once before your app starts', text: NODE_SNIPPET, note: 'Fetch at startup, not during the build — build-time values can end up inside your image or frontend bundle.' },
+    python: { label: 'Add this file, and call it once before your app starts', text: PYTHON_SNIPPET, note: 'Fetch at startup, not during the build — build-time values can end up inside your image or frontend bundle.' },
+    shell: { label: 'Use as your start command', text: SHELL_SNIPPET, note: 'Add ?format=json for JSON. Works for any language that reads a .env file.' },
+    ai: {
+      label: 'Paste this into your AI coding assistant (Claude, Cursor, Copilot…)',
+      text: aiPrompt(meta, url),
+      note: 'The prompt has no secrets in it. Set the two variables above in your deployment platform yourself — don’t paste the token into the chat.',
+    },
+  }
+  const cur = body[tab]
   return (
     <Modal title={`Deploy token “${meta.name}” created`} onClose={onClose} wide>
       <div className="space-y-4">
@@ -266,14 +347,26 @@ function DeployTokenShownModal({ token, meta, url, onClose }: { token: string; m
           Copy it now — <b>it won’t be shown again.</b> If you lose it, revoke it and create a new one.
         </div>
         <CopyBlock label="1. Set these two variables in your deployment platform" text={`REXUS_URL=${url}\nREXUS_TOKEN=${token}`} />
-        <CopyBlock
-          label="2. Make your start command load the env first"
-          text={`curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" "$REXUS_URL/api/v1/env" > .env && node server.js`}
-        />
-        <p className="text-xs text-zinc-500">
-          <code>-f</code> makes the start fail if Rexus can't be reached, instead of running without secrets. Fetch at <b>startup</b>, not
-          during the build — build-time values can end up inside your image or frontend bundle. Add <code>?format=json</code> for JSON.
-        </p>
+        <div>
+          <div className="mb-2 text-xs text-zinc-500">2. Connect your app</div>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={cx(
+                  'rounded-md border px-3 py-1 text-xs',
+                  tab === t.id ? 'border-emerald-700 bg-emerald-950/50 text-emerald-300' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <CopyBlock label={cur.label} text={cur.text} tall={tab === 'ai'} />
+          <p className="mt-2 text-xs text-zinc-500">{cur.note}</p>
+        </div>
         <Button type="button" variant="ghost" onClick={onClose}>Done</Button>
       </div>
     </Modal>

@@ -109,6 +109,8 @@ Create one on the project's page, under **Deploy tokens** (owner, admin or contr
 curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" "$REXUS_URL/api/v1/env" > .env && node server.js
 ```
 
+The dialog shown when you create a token also has ready-made **Node.js** and **Python** snippets (a few lines that load the env at startup) and an **AI prompt** you can paste into a coding assistant to wire it up for you — the prompt contains no secrets.
+
 `-f` makes the start fail when Rexus can't be reached, instead of running without secrets. Fetch at **startup**, not during the build: build-time values can end up inside a Docker image or a frontend bundle. Each call is audited. `?format=json` returns exact JSON; the `.env` output quotes values so Node's `--env-file`, the dotenv packages and Docker Compose read them the same way. Revoke a token any time on the project page or the **API** page.
 
 ## API for other tools (CRM, CI, status boards)
