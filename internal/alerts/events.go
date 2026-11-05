@@ -11,6 +11,7 @@ const (
 	EventSecretExpiring = "secret.expiring"
 	EventJobFailed      = "job.failed"
 	EventNewDevice      = "login.new_device"
+	EventBackupFailed   = "backup.failed"
 )
 
 // EventDef describes one alert event in the settings UI.
@@ -30,6 +31,7 @@ var Events = []EventDef{
 	{EventSSLExpiring, "SSL certificate expiring", "A certificate enters its warning window (set per check), then again at 7 and 1 days.", true, false},
 	{EventSecretExpiring, "Secret / API key expiring", "Reminders before a key's expiry date, and once when it has expired.", true, true},
 	{EventJobFailed, "Cron job failed", "A job's run failed. You get one alert when it starts failing, not one per run.", true, false},
+	{EventBackupFailed, "Backup failed", "A backup couldn't be written (full disk, drive unplugged…). You get one alert when backups start failing, not one per attempt.", true, false},
 	{EventNewDevice, "New login from a new device", "Someone logs in from an IP address or browser they haven't used before.", false, false},
 }
 

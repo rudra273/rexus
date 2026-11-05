@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 5** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, and **alerts** (Telegram, Slack, Discord, email). See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 6** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, **alerts** (Telegram, Slack, Discord, email), and **backups** with one-step restore. See [plan.md](plan.md) for the full roadmap.
 
 ## Quick start (Docker)
 
@@ -58,6 +58,9 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 | `rexus owner create --email you@company.com` | Create the owner (instead of the setup screen) |
 | `rexus owner reset` | Lost password or 2FA: set a new password, reset 2FA, log out all owner sessions |
 | `rexus owner transfer --to EMAIL` | Hand ownership to another active user (you become an admin) |
+| `rexus backup now` | Take a backup now (into `REXUS_BACKUP_DIR`) |
+| `rexus backup list` | List the backups in the backup folder |
+| `rexus restore --file PATH` | Restore a backup into an **empty** database |
 | `rexus migrate` | Run database migrations and exit |
 | `rexus keygen` | Generate a `REXUS_MASTER_KEY` |
 
@@ -82,6 +85,45 @@ A check is 🟢 **Up**, 🟡 **Degraded** (slow, or SSL expiring), or 🔴 **Dow
 The **Dashboard** lists everything that needs attention across all projects — checks that are down or degraded, failed jobs, and keys about to expire — with the most serious projects first. Probe results are kept for 30 days.
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
+
+## Backups
+
+Backups are plain `pg_dump` copies of the whole database, written to a folder **you** choose — a local disk, an external drive, a pendrive — never inside the Rexus folder and never into git. They are off by default, so you can switch them on only on the machine that keeps them.
+
+**Turn them on** in `.env`, then restart Rexus:
+
+```
+REXUS_BACKUP_ENABLED=true
+REXUS_BACKUP_DIR=/Volumes/MyDrive/rexus-backups
+```
+
+With Docker, `REXUS_BACKUP_DIR` is the folder on your computer; Docker mounts it into the container for you. (On Linux the folder must be writable by the container's user — `chmod 777` it, or `chown` it to uid 100.) If you unplug and re-plug a drive, restart Rexus (`docker compose restart rexus`) so Docker re-attaches it.
+
+Then open **Backups** (owner and admins):
+
+- **Backup now**, and an automatic schedule: every 15 minutes, hour, 6 hours (default), 24 hours, or manual only. After a failed attempt Rexus retries within 15 minutes.
+- **Keep the last N** backups (default 28). Older ones are deleted automatically — only files named `rexus-YYYYMMDD-HHMMSS.dump`; anything else in the folder is never touched.
+- A **"Last backup: 12m ago"** indicator is always visible in the sidebar: green when current, yellow when overdue (older than twice the interval), red when the last attempt failed or none has run yet.
+- A **failed backup raises an alert** (once when backups start failing) — see **Alerts**.
+- Rexus doesn't back up a database that has no accounts yet, so a freshly wiped instance can't push your good backups out with empty ones.
+
+Each backup is written to a temporary file, checked with `pg_restore --list`, and only then renamed into place, so a full disk or a crash can't leave something that looks like a good backup. Files are created private (`0600`).
+
+**Backups are not encrypted** — keep the folder on storage you trust. Vault secrets inside them stay encrypted with `REXUS_MASTER_KEY`, so a backup alone can't reveal them. The flip side: **a backup is useless without the master key that was in use when it was made.** Keep that key somewhere safe, separate from the backups.
+
+**Restoring** works only into an **empty** database — it can never overwrite live data. For a new or wiped instance:
+
+- **From the setup screen:** if Rexus finds backups in the backup folder, it offers to restore one (using the one-time setup code from the logs, like creating the owner); or
+- **From the command line:**
+
+  ```bash
+  rexus restore --file /backups/rexus-20261105-120000.dump
+  ```
+  With Docker: `docker compose exec rexus rexus restore --file /backups/rexus-….dump`
+
+Restores run in a single transaction (all or nothing). Afterwards you log in with the accounts from the backup. If your `REXUS_MASTER_KEY` isn't the one that made the backup, Rexus tells you so clearly. To restore a backup from a *newer* Rexus into an older one, upgrade Rexus first.
+
+The `pg_dump` in the Docker image is PostgreSQL 17 and must be at least as new as your database; with a newer external database (some Supabase or Neon versions), Rexus shows the "server version mismatch" message.
 
 ## Alerts
 
@@ -108,6 +150,7 @@ Tokens and webhook URLs are stored encrypted and are never shown again. Webhooks
 | SSL certificate expiring | on | A certificate enters its warning window, then again at 7 and 1 days. |
 | Secret / API key expiring | on | At 30, 7 and 1 days before the expiry date (you choose the days), and once when it has expired. |
 | Cron job failed | on | A job starts failing (one alert, not one per failed run). |
+| Backup failed | on | Backups start failing — a full disk, an unplugged drive… (only listed when backups are switched on). |
 | New login from a new device | off | Someone logs in from an IP address or browser they haven't used before. |
 
 **No spam.** Down, recovered and job alerts fire once, when the state changes. Expiry reminders go to each channel once per threshold (a key you re-date reminds again). A channel that keeps failing is given up on after 3 tries; the failure shows under **Recent alerts**.

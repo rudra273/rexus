@@ -94,3 +94,11 @@ func NewUUID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
+
+// SecretAAD is the encryption context of one vault secret version.
+func SecretAAD(secretID string, version int) []byte {
+	return []byte(fmt.Sprintf("rexus:secret:%s:v%d", secretID, version))
+}
+
+// TOTPAAD is the encryption context of a user's 2FA secret.
+func TOTPAAD(userID string) []byte { return []byte("rexus:totp:" + userID) }

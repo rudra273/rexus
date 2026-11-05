@@ -9,5 +9,13 @@ services:
     image: rexus:local
     restart: unless-stopped
     env_file: .env
+    environment:
+      # REXUS_BACKUP_DIR in .env is a folder on YOUR computer; it is mounted at /backups.
+      REXUS_BACKUP_DIR: ${REXUS_BACKUP_DIR:+/backups}
+    volumes:
+      - ${REXUS_BACKUP_DIR:-rexus-no-backups}:/backups
     ports:
       - "${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"
+
+volumes:
+  rexus-no-backups:

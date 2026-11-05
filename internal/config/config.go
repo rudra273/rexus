@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -133,6 +134,11 @@ func Load() (*Config, []string, error) {
 	c.BackupEnabled = parseBool("REXUS_BACKUP_ENABLED", false, fail)
 	if c.BackupEnabled && c.BackupDir == "" {
 		fail("REXUS_BACKUP_DIR is required when REXUS_BACKUP_ENABLED=true")
+	}
+	if c.BackupDir != "" {
+		if abs, err := filepath.Abs(c.BackupDir); err == nil {
+			c.BackupDir = abs
+		}
 	}
 
 	// Optional SMTP relay. Port 465 = TLS from the start, anything else = STARTTLS.

@@ -27,9 +27,7 @@ var (
 )
 
 // secretAAD ties a ciphertext to one specific secret version.
-func secretAAD(secretID string, version int) []byte {
-	return []byte(fmt.Sprintf("rexus:secret:%s:v%d", secretID, version))
-}
+func secretAAD(secretID string, version int) []byte { return crypto.SecretAAD(secretID, version) }
 
 type secretInput struct {
 	Name         string            `json:"name"`

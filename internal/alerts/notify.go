@@ -76,6 +76,19 @@ func (s *Service) JobFailed(j *store.Job, run *store.JobRun) {
 	s.Notify(m)
 }
 
+// BackupFailed alerts that a backup could not be written. The caller sends it
+// only when backups go from working to failing, not on every retry.
+func (s *Service) BackupFailed(reason string, lastGood *time.Time) {
+	m := Message{Event: EventBackupFailed, Severity: "critical", Headline: "BACKUP FAILED — " + s.company, Link: s.Link("/backups")}
+	m.Lines = []string{"Reason: " + reason, "When: " + fmtUTC(time.Now())}
+	if lastGood != nil {
+		m.Lines = append(m.Lines, "Last good backup: "+fmtUTC(*lastGood))
+	} else {
+		m.Lines = append(m.Lines, "There is no good backup yet.")
+	}
+	s.Notify(m)
+}
+
 // NewDeviceLogin alerts that someone logged in from an IP/browser not seen before.
 func (s *Service) NewDeviceLogin(u *store.User, ip, userAgent string) {
 	s.Notify(Message{

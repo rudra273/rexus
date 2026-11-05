@@ -7,6 +7,7 @@ import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
 import { AlertsPage } from './pages/alerts'
+import { BackupPill, BackupsPage, useBackupStatus } from './pages/backups'
 import { AcceptInvitePage, AuditPage, ResetPasswordPage, UsersPage } from './pages/team'
 import { VaultPage } from './pages/vault'
 import { cx, Spinner } from './ui'
@@ -69,6 +70,7 @@ export default function App() {
         {isAdmin(user.role) && (
           <>
             <Route path="/alerts" element={<AlertsPage />} />
+            {meta.backup_enabled && <Route path="/backups" element={<BackupsPage />} />}
             <Route path="/users" element={<UsersPage />} />
             <Route path="/audit" element={<AuditPage />} />
           </>
@@ -82,6 +84,8 @@ export default function App() {
 
 function Layout() {
   const { meta, user, setSession } = useAuth()
+  // The "last backup" indicator is always visible to the owner and admins when backups are on.
+  const backupStatus = useBackupStatus(!!user && isAdmin(user.role) && !!meta?.backup_enabled)
   const nav = [
     { to: '/', label: 'Dashboard', end: true },
     ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', end: false }] : []),
@@ -89,6 +93,7 @@ function Layout() {
     ...(user && isAdmin(user.role)
       ? [
           { to: '/alerts', label: 'Alerts', end: false },
+          ...(meta?.backup_enabled ? [{ to: '/backups', label: 'Backups', end: false }] : []),
           { to: '/users', label: 'Users', end: false },
           { to: '/audit', label: 'Audit log', end: false },
         ]
@@ -125,15 +130,19 @@ function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="hidden px-4 py-4 md:absolute md:bottom-0 md:block md:w-56">
-          <div className="truncate text-xs text-zinc-400">{user?.email}</div>
-          <div className="mt-0.5 flex items-center justify-between">
+        <div className="hidden px-2 py-4 md:absolute md:bottom-0 md:block md:w-56">
+          <BackupPill status={backupStatus} />
+          <div className="mt-1 truncate px-2 text-xs text-zinc-400">{user?.email}</div>
+          <div className="mt-0.5 flex items-center justify-between px-2">
             <span className="text-[11px] text-zinc-500">{user?.role}</span>
             <button onClick={logout} className="text-xs text-zinc-500 hover:text-zinc-200">Log out</button>
           </div>
         </div>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
+        <div className="mb-3 md:hidden">
+          <BackupPill status={backupStatus} />
+        </div>
         <div className="mx-auto max-w-6xl">
           <Outlet />
         </div>

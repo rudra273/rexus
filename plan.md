@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–5 built** — next is Phase 6 (Backups). See §13.
+Status: **Phases 1–6 built** — next is Phase 7 (API & external tools). See §13.
 
 ---
 
@@ -490,7 +490,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** a site going down or a key about to expire sends a message to the team channel.
 
-### Phase 6 — Backups
+### Phase 6 — Backups ✅ built
+> Built Nov 2026. Notes: plain `pg_dump -Fc` (schema `public`), written to a `.partial` file, verified with `pg_restore --list`, then renamed; files are `rexus-YYYYMMDD-HHMMSS.dump` (UTC) and mode 0600; no `latest` pointer file (symlinks don't exist on the FAT/exFAT pendrives you may use — the file names sort by time instead); interval choices 15m / 1h / 6h (default) / 24h / manual, keep-last-N default 28, both stored in the DB `settings` table; after a failed attempt the retry is within 15 minutes; a database with no accounts is never backed up (an empty backup would become the "newest" one); restore is only into an empty database, in one transaction, from `rexus restore` or the setup screen (guarded by the setup code), followed by a master-key check; the `backups` table records finished attempts only; `backup.failed` alert fires once when backups start failing.
 - `REXUS_BACKUP_ENABLED` + `REXUS_BACKUP_DIR`, `pg_dump` backups.
 - Backups page: Backup now, interval, keep-last-N, list; always-visible "Last backup" indicator.
 - Restore via CLI + setup screen when DB is empty; backup-failed alert.

@@ -20,6 +20,7 @@ import (
 
 	"rexus/internal/alerts"
 	"rexus/internal/auth"
+	"rexus/internal/backup"
 	"rexus/internal/config"
 	"rexus/internal/crypto"
 	"rexus/internal/scheduler"
@@ -33,6 +34,7 @@ type Server struct {
 	keys    *crypto.Keyring
 	engine  *scheduler.Engine
 	alerts  *alerts.Service
+	backups *backup.Service
 	log     *slog.Logger
 	version string
 
@@ -45,13 +47,14 @@ type Server struct {
 	linkLimiter  *auth.Limiter // bad invite/reset tokens, per IP
 }
 
-func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, log *slog.Logger, version string) *Server {
+func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, bk *backup.Service, log *slog.Logger, version string) *Server {
 	return &Server{
 		cfg:          cfg,
 		store:        st,
 		keys:         keys,
 		engine:       engine,
 		alerts:       al,
+		backups:      bk,
 		log:          log,
 		version:      version,
 		loginLimiter: auth.NewLimiter(5, 15*time.Minute),
@@ -110,6 +113,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("POST /api/setup", s.handleSetup)
+	mux.HandleFunc("GET /api/setup/backups", s.handleSetupBackups)
+	mux.HandleFunc("POST /api/setup/restore", s.handleSetupRestore)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	// Invite and password-reset links (the token in the URL is the credential).
 	mux.HandleFunc("GET /api/join/{token}", s.handleJoinInfo)
@@ -141,6 +146,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/invites/{id}", s.authed(s.handleRevokeInvite))
 	mux.HandleFunc("POST /api/owner/transfer", s.authed(s.handleTransferOwnership))
 	mux.HandleFunc("GET /api/audit", s.authed(s.handleAudit))
+
+	// Backups (owner / admin; 404 unless REXUS_BACKUP_ENABLED)
+	mux.HandleFunc("GET /api/backups", s.authed(s.handleListBackups))
+	mux.HandleFunc("GET /api/backups/status", s.authed(s.handleBackupStatus))
+	mux.HandleFunc("POST /api/backups/run", s.authed(s.handleRunBackup))
+	mux.HandleFunc("PUT /api/backups/settings", s.authed(s.handleBackupSettings))
 
 	// Alerts (owner / admin)
 	mux.HandleFunc("GET /api/alerts/channels", s.authed(s.handleListChannels))

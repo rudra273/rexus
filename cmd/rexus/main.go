@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +23,7 @@ import (
 
 	"rexus/internal/alerts"
 	"rexus/internal/auth"
+	"rexus/internal/backup"
 	"rexus/internal/config"
 	"rexus/internal/crypto"
 	"rexus/internal/db"
@@ -64,6 +67,10 @@ func run(args []string) error {
 		return cmdServe()
 	case "owner":
 		return cmdOwner(args[1:])
+	case "backup":
+		return cmdBackup(args[1:])
+	case "restore":
+		return cmdRestore(args[1:])
 	case "migrate":
 		return cmdMigrate()
 	case "keygen":
@@ -147,11 +154,10 @@ func cmdServe() error {
 		}
 	}
 
-	al := alerts.New(st, keys, log, cfg.BaseURL, cfg.CompanyName, alerts.SMTPConfig{
-		Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
-	})
+	al := newAlerts(cfg, st, keys, log)
+	bk := backup.New(st, log, al, backup.Options{Enabled: cfg.BackupEnabled, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
 	engine := scheduler.New(st, keys, log, cfg.ModuleScheduler, al)
-	srv := server.New(cfg, st, keys, engine, al, log, version)
+	srv := server.New(cfg, st, keys, engine, al, bk, log, version)
 	if err := srv.InitSetup(ctx); err != nil {
 		return err
 	}
@@ -159,6 +165,7 @@ func cmdServe() error {
 	engineCtx, stopEngine := context.WithCancel(context.Background())
 	engine.Start(engineCtx)
 	al.Start(engineCtx)
+	bk.Start(engineCtx)
 
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -189,6 +196,7 @@ func cmdServe() error {
 	httpSrv.Shutdown(shutdownCtx)
 	stopEngine()
 	engine.Wait(30 * time.Second)
+	bk.Wait(30 * time.Second)
 	al.Wait(20 * time.Second)
 	return nil
 }
@@ -391,4 +399,154 @@ func promptNewPassword() (string, error) {
 		}
 		return string(a), nil
 	}
+}
+
+func newAlerts(cfg *config.Config, st *store.Store, keys *crypto.Keyring, log *slog.Logger) *alerts.Service {
+	return alerts.New(st, keys, log, cfg.BaseURL, cfg.CompanyName, alerts.SMTPConfig{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
+	})
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// dbLabel describes the database without its password, for confirmation prompts.
+func dbLabel(dbURL string) string {
+	u, err := url.Parse(dbURL)
+	if err != nil || u.Host == "" {
+		return "the configured database"
+	}
+	return u.Host + u.Path
+}
+
+func cmdBackup(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: rexus backup now | rexus backup list")
+	}
+	cfg, log, err := setup()
+	if err != nil {
+		return err
+	}
+	if cfg.BackupDir == "" {
+		return errors.New("REXUS_BACKUP_DIR is not set — it is the folder backups are written to")
+	}
+	ctx := context.Background()
+	pool, err := connect(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	keys, err := crypto.NewKeyring(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	st := store.New(pool)
+	al := newAlerts(cfg, st, keys, log)
+	bk := backup.New(st, log, al, backup.Options{Enabled: true, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
+
+	switch args[0] {
+	case "now":
+		fmt.Println("Backing up…")
+		rec, err := bk.Run(ctx, "manual", nil)
+		al.Wait(20 * time.Second) // let a "backup failed" alert go out
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Done: %s (%s)\nFolder: %s\n", *rec.FileName, humanSize(*rec.SizeBytes), cfg.BackupDir)
+		return nil
+	case "list":
+		files, err := bk.Files()
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			fmt.Println("No backups in", cfg.BackupDir)
+			return nil
+		}
+		for _, f := range files {
+			fmt.Printf("%s  %9s  %s\n", f.CreatedAt.Format("2006-01-02 15:04 UTC"), humanSize(f.SizeBytes), f.Name)
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown backup command %q (use now or list)", args[0])
+}
+
+func cmdRestore(args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	file := fs.String("file", "", "path to a backup file (required)")
+	yes := fs.Bool("yes", false, "skip the confirmation prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *file == "" {
+		return errors.New("--file is required, e.g. rexus restore --file /backups/rexus-20261105-120000.dump")
+	}
+	path, err := filepath.Abs(*file)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("can't read %s", path)
+	}
+
+	cfg, log, err := setup()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := connect(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	keys, err := crypto.NewKeyring(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	st := store.New(pool)
+	bk := backup.New(st, log, nil, backup.Options{Dir: filepath.Dir(path), DatabaseURL: cfg.DatabaseURL})
+
+	empty, err := bk.DatabaseIsEmpty(ctx)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		return backup.ErrNotEmpty
+	}
+	if !*yes {
+		fmt.Printf("Restore %s into the database %s? Type YES to confirm: ", filepath.Base(path), dbLabel(cfg.DatabaseURL))
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(line) != "YES" {
+			return errors.New("cancelled")
+		}
+	}
+	fmt.Println("Restoring…")
+	if err := bk.Restore(ctx, path); err != nil {
+		return err
+	}
+	pool.Reset()
+	if err := db.Migrate(ctx, pool, log); err != nil {
+		return fmt.Errorf("the backup was restored, but updating the database failed: %w", err)
+	}
+
+	var users, projects, secrets int
+	pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM projects), (SELECT count(*) FROM secrets)`).Scan(&users, &projects, &secrets)
+	st.Audit(ctx, store.AuditEntry{Actor: "cli", Action: "backup.restore", TargetType: "backup", TargetID: filepath.Base(path),
+		Details: map[string]any{"file": filepath.Base(path), "via": "cli"}})
+	fmt.Printf("Restored %s: %d users, %d projects, %d secrets.\n", filepath.Base(path), users, projects, secrets)
+	if checked, kerr := backup.CheckMasterKey(ctx, st, keys); checked && kerr != nil {
+		fmt.Println("\nWARNING:", backup.KeyWarning)
+	}
+	fmt.Println("Start Rexus and log in with the accounts from the backup.")
+	return nil
 }

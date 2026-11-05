@@ -44,6 +44,7 @@ export interface Meta {
   env: string
   setup_required: boolean
   two_fa_mode: string
+  backup_enabled: boolean
   modules: { scheduler: boolean; vault: boolean }
 }
 
@@ -196,6 +197,45 @@ export interface SecretVersion {
   created_by: string | null
   created_at: string
   current: boolean
+}
+
+export interface BackupSettings {
+  interval_minutes: number
+  keep: number
+}
+
+export type BackupState = 'ok' | 'stale' | 'failed' | 'none'
+
+export interface BackupStatus {
+  enabled: boolean
+  dir: string
+  settings: BackupSettings
+  running: boolean
+  state: BackupState
+  last_success_at: string | null
+  last_attempt_at: string | null
+  last_error: string | null
+  next_run_at: string | null
+  files: number
+}
+
+export interface BackupRow {
+  id: string
+  file_name: string | null
+  size_bytes: number | null
+  status: 'success' | 'failed'
+  error: string | null
+  trigger: 'manual' | 'scheduled'
+  triggered_by: string | null
+  started_at: string
+  finished_at: string | null
+  on_disk: boolean
+}
+
+export interface BackupFile {
+  name: string
+  size_bytes: number
+  created_at: string
 }
 
 export type ChannelType = 'telegram' | 'discord' | 'slack' | 'email'

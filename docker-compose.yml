@@ -37,8 +37,15 @@ services:
     environment:
       # Points at the bundled Postgres; overrides DATABASE_URL from .env.
       DATABASE_URL: postgres://rexus:${POSTGRES_PASSWORD:-rexus}@postgres:5432/rexus?sslmode=disable
+      # Backups: REXUS_BACKUP_DIR in .env is a folder on YOUR computer (an external
+      # drive, a pendrive…). It is mounted at /backups inside the container.
+      REXUS_BACKUP_DIR: ${REXUS_BACKUP_DIR:+/backups}
+    volumes:
+      # With no REXUS_BACKUP_DIR this is just an empty, unused volume.
+      - ${REXUS_BACKUP_DIR:-rexus-no-backups}:/backups
     ports:
       - "${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"
 
 volumes:
   pgdata:
+  rexus-no-backups:

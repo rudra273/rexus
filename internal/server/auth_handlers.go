@@ -35,7 +35,7 @@ type authCtx struct {
 
 type authHandler func(w http.ResponseWriter, r *http.Request, a *authCtx)
 
-func totpAAD(userID string) []byte { return []byte("rexus:totp:" + userID) }
+func totpAAD(userID string) []byte { return crypto.TOTPAAD(userID) }
 
 // loadSession resolves the session cookie to a live session + active user.
 func (s *Server) loadSession(r *http.Request) (*authCtx, error) {
@@ -192,6 +192,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"env":            s.cfg.Env,
 		"setup_required": !exists,
 		"two_fa_mode":    s.cfg.TwoFAMode,
+		"backup_enabled": s.cfg.BackupEnabled,
 		"modules": map[string]bool{
 			"scheduler": s.cfg.ModuleScheduler,
 			"vault":     s.cfg.ModuleVault,
