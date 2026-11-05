@@ -1,4 +1,4 @@
-import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
@@ -54,8 +54,29 @@ export function Button({
 const inputCls =
   'w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-60'
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cx(inputCls, className)} {...props} />
+export function Input({ className, type, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const [shown, setShown] = useState(false)
+  if (type !== 'password') return <input className={cx(inputCls, className)} type={type} {...props} />
+  // Password fields get a show/hide button.
+  return (
+    <div className="relative">
+      <input className={cx(inputCls, 'pr-10', className)} type={shown ? 'text' : 'password'} {...props} />
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={() => setShown(!shown)}
+        aria-label={shown ? 'Hide' : 'Show'}
+        title={shown ? 'Hide' : 'Show'}
+        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-zinc-400 hover:text-zinc-100"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+          <circle cx="12" cy="12" r="3" />
+          {shown && <path d="M3 3l18 18" />}
+        </svg>
+      </button>
+    </div>
+  )
 }
 
 export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
