@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–7 built** — every planned phase is done. Remaining: the license (MIT) and the first public release; see §13 "Later".
+Status: **Phases 1–7 + services built.** Next: Phase 8 (Cloudflare Tunnel) and Phase 9 (deploy tokens — apps load their env from Rexus at startup); see §13.
 
 ---
 
@@ -402,7 +402,7 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 | `invites` | email, role, token_hash, invited_by, expires_at, used_at |
 | `sessions` | user_id, token_hash, ip, user_agent, expires_at, revoked_at |
 | `password_resets` | user_id, token_hash, expires_at, used_at |
-| `api_tokens` | name, token_hash, role, created_by, last_used_at, expires_at, revoked_at |
+| `api_tokens` | name, token_hash, role, created_by, last_used_at, expires_at, revoked_at; Phase 9 adds kind (`api`/`deploy`) + project/service/environment scope |
 
 **Projects & vault**
 
@@ -435,80 +435,95 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 ---
 
+
 ## 13. Build phases
 
-Each phase ends with something **working and usable**. Phases are small so the AI can build and test them one at a time.
+**Built:** Phases 1–7 (foundation + keepalive jobs, Vault, team, health checks + dashboard, alerts, backups, read-only API) and optional **services** per project. How they work is in the README and in §1–12 above; the detailed build notes are in git history.
 
-### Phase 1 — Foundation + keepalive pings (first useful version) ✅ built
-> Built Nov 2026. Notes: schedules are cron or `@every 10m` style with a 1-minute minimum; job request headers are encrypted with the master key; job run history is kept 30 days; IP allowlist is validated but only enforced from Phase 3.
+**Next:** Phase 8 (Cloudflare Tunnel) → Phase 9 (deploy tokens: apps load their env from Rexus at startup). Phase 10 (Rexus pushes secrets into deployments) is future.
 
-**Goal:** run Rexus, log in, add projects, and keep Supabase / APIs awake.
-- Go project skeleton, React UI embedded in the binary, `Dockerfile` + `docker-compose.yml` (Rexus + Postgres).
-- Env config + toggles (§3) with validation; `.env.example`.
-- DB migrations on start.
-- Owner setup — **UI (setup code) + CLI** (`rexus owner create/reset`).
-- Login: email + password + 2FA (TOTP), sessions, logout, rate limiting.
-- Projects: create / edit / delete, unique project key, rename.
-- Scheduler engine + user jobs: **HTTP ping / keepalive** (URL, method, cron schedule, timeout, retries).
-- Job run history (status, duration, error) in the UI.
-- Audit log written from day one (UI comes in Phase 3).
+### Phase 8 — Public HTTPS address with Cloudflare Tunnel
 
-**Done when:** `docker compose up` → create owner → add project → add a keepalive job for Supabase → see it run on schedule and survive a restart.
+**Goal:** cloud deployments (Vidyakalp etc.) can reach Rexus over HTTPS, without opening any port on the router.
 
-### Phase 2 — Vault ✅ built
-> Built Nov 2026. Notes: every secret *version* gets its own data key, wrapped by the master key, and is bound to its secret ID + version so rows can't be swapped; viewers see names, expiry and tags only (notes, custom fields, history and values are hidden); reveal and copy are audit-logged; an environment can only be deleted when empty; expiring keys show on the dashboard and Vault page (alert messages arrive in Phase 5).
-- Master-key envelope encryption (§6).
-- Environments per project (dev / staging / prod + custom).
-- Secrets: name, value, expiry, notes, tags, custom fields.
-- Reveal / copy (audit-logged), version history, restore.
-- Search / filter by tag, environment, expiry.
+**Setup (one time, no code):**
+1. Domain on Cloudflare (e.g. `example.com`).
+2. Install `cloudflared` on the Rexus machine → `cloudflared tunnel login` → `cloudflared tunnel create rexus`.
+3. Route a hostname to it: `cloudflared tunnel route dns rexus rexus.example.com`, and point the tunnel's ingress at `http://localhost:8080`.
+4. Run it as a service so it starts on boot (`cloudflared service install`), or as a `cloudflared` container in `docker-compose.yml`.
+5. In `.env`: `REXUS_BASE_URL=https://rexus.example.com` (turns on secure cookies) → restart Rexus.
+6. Publish Rexus's port on `127.0.0.1` only, so it's reachable just through the tunnel.
 
-**Done when:** all project keys are stored in Rexus, encrypted in the DB, with history.
+**Lock down the UI (recommended):** put **Cloudflare Access** (Zero Trust, free tier) in front of everything **except `/api/v1/*`**. The team logs in to the UI through Access (email code / Google) *and* Rexus's own login + 2FA. `/api/v1` stays open to the internet, protected by tokens, rate limits and the bad-token lockout.
 
-### Phase 3 — Team ✅ built
-> Built Nov 2026. Notes: invite links are copied and shared by the admin — emailing them waits for SMTP in Phase 5; invites last 7 days, reset links 24 hours, both single-use and stored only as hashes; owner transfer needs password + 2FA code (UI) or server access (`rexus owner transfer`); users can change their own password and log out of all devices; `REXUS_IP_ALLOWLIST` reads the real IP from a local proxy's header (see README caveat for Docker Desktop); lockdown mode and the 2FA mode are enforced.
-- Invites (link; emailed if SMTP set, else copy), roles: Owner / Admin / Contributor / Viewer.
-- Permission checks on every API call (§5).
-- User management: disable, remove, role change, password-reset link, reset 2FA.
-- Lockdown mode, IP allowlist, 2FA mode toggles enforced.
-- Audit log page (Owner/Admin).
+**Things to know:**
+- **Deploys need Rexus online.** If Rexus runs on a laptop, a deploy/restart fails while the laptop is off or asleep. Running apps are not affected. Move Rexus to an always-on box/VPS when this starts to matter.
+- **IP allowlist:** `REXUS_IP_ALLOWLIST` also applies to the API. Cloud platforms don't have fixed IPs, so keep it at `0.0.0.0` (and rely on Cloudflare Access for the UI) — or list the platform's outbound IPs if it has them.
+- Real client IPs come from `CF-Connecting-IP`; Rexus already trusts that header when the connection comes from a local/private address (where `cloudflared` runs).
 
-**Done when:** engineers can be invited and see only what their role allows.
+**Code changes:** none required. Optional: a `cloudflared` service in `docker-compose.yml` (off by default, `TUNNEL_TOKEN` in `.env`) and a README section.
 
-### Phase 4 — Health checks & dashboard ✅ built
-> Built Nov 2026. Notes: every threshold in §7.1 is configurable per check; status changes are stored in `health_events` (with the reason), which Phase 5 alerts will send; probe results are kept 30 days; health checks always run (they are system jobs, independent of `REXUS_MODULE_SCHEDULER`); GET/HEAD only, redirects followed, no custom request headers yet; the dashboard has a "Needs attention" list combining down/degraded checks, failing jobs and expiring keys. Domain-expiry checks are not built yet.
-- Configurable health checks (§7.1): status code, response time, SSL expiry, down/recovery thresholds.
-- Project status (up / degraded / down) and dashboard: overview of all projects, uptime %, response-time chart, expiring secrets list, failed jobs.
+**Done when:** `curl https://rexus.example.com/api/v1/health -H "Authorization: Bearer …"` works from outside, and the UI asks for Cloudflare Access login first.
 
-**Done when:** one screen shows the health of every project.
+### Phase 9 — Deploy tokens: apps load their env at startup
 
-### Phase 5 — Alerts ✅ built
-> Built Nov 2026. Notes: channels are Telegram, Slack, Discord and email (SMTP relay via `REXUS_SMTP_*`); bot tokens and webhook URLs are stored encrypted and never returned; webhooks are accepted only for the real Slack/Discord hosts; events are switched per type in the UI (defaults as in §8.1); down/recovered/job alerts fire once on the state change, expiry reminders once per channel per threshold (hourly check, de-duplicated in `alerts_sent`); "new login from a new device" added; invite and password-reset links are emailed when SMTP is configured. The `backup.failed` event arrives with backups in Phase 6.
-- Global channels: Telegram, Discord, Slack, email (SMTP relay).
-- Configurable events (§8.1), messages with project info + link, no duplicate spam, test button.
-- Secret expiry reminders, SSL expiry, job failed, site down/recovered.
+**The flow:**
+```
+Update a secret in the Vault → restart the deployment → app fetches its env from Rexus once at startup → app runs
+```
+Rexus is called **once per start/restart**, never per user request. While the app runs, Rexus can be offline.
 
-**Done when:** a site going down or a key about to expire sends a message to the team channel.
+**1. Deploy tokens** (extend the existing `api_tokens`, no new auth system)
+- New columns: `kind` (`api` | `deploy`), `project_id`, `service_id` (nullable = the project's own secrets), `environment_id`. Scope columns are required for `deploy`, empty for `api`. DB checks enforce this; foreign keys cascade when the project/service/environment is deleted.
+- Same format and protections as today: `rxt_…`, stored only as a hash, shown once, expiry (30d / 90d / 1y / never), revoke, rate limit, bad-token lockout, lockdown mode, IP allowlist, last used time + IP.
+- A deploy token can call **only** `GET /api/v1/env` (and `GET /api/v1/health`). Every other `/api/v1` route returns `403`. An `api` token cannot call `/env`.
+- Who can create/revoke: Owner, Admin and Contributor (same people who can reveal secrets). Viewers can only see the list.
+- Separate limit from API tokens: max 100 active deploy tokens.
 
-### Phase 6 — Backups ✅ built
-> Built Nov 2026. Notes: plain `pg_dump -Fc` (schema `public`), written to a `.partial` file, verified with `pg_restore --list`, then renamed; files are `rexus-YYYYMMDD-HHMMSS.dump` (UTC) and mode 0600; no `latest` pointer file (symlinks don't exist on the FAT/exFAT pendrives you may use — the file names sort by time instead); interval choices 15m / 1h / 6h (default) / 24h / manual, keep-last-N default 28, both stored in the DB `settings` table; after a failed attempt the retry is within 15 minutes; a database with no accounts is never backed up (an empty backup would become the "newest" one); restore is only into an empty database, in one transaction, from `rexus restore` or the setup screen (guarded by the setup code), followed by a master-key check; the `backups` table records finished attempts only; `backup.failed` alert fires once when backups start failing.
-- `REXUS_BACKUP_ENABLED` + `REXUS_BACKUP_DIR`, `pg_dump` backups.
-- Backups page: Backup now, interval, keep-last-N, list; always-visible "Last backup" indicator.
-- Restore via CLI + setup screen when DB is empty; backup-failed alert.
+**2. Endpoint**
+```
+GET /api/v1/env                → text/plain, .env format
+GET /api/v1/env?format=json    → {"KEY": "value", …}
+```
+- Returns the **current version** of every secret in the token's project + environment (+ service, if set). Nothing else: no notes, tags, history.
+- `.env` output: `KEY="value"` with quotes/newlines escaped so any value round-trips; sorted by name.
+- `Cache-Control: no-store`.
+- Audit-logged on **every** call: token, IP, number of secrets (not names/values).
+- Empty scope returns an empty file with `200` (not an error).
 
-**Done when:** backups run on schedule to a local/external folder and can be restored into an empty DB.
+**3. UI — Vault page → project → "Deploy tokens"**
+- **Create:** name (e.g. `vidyakalp-prod-backend`), environment, service (optional), expiry → the token is shown once, with a ready start command to copy.
+- **List:** name, prefix, scope, created by, last used (time + IP), expiry, **Revoke**.
+- **API page:** a read-only list of *all* deploy tokens across projects (with revoke), next to the existing API tokens; API docs gain the `/env` endpoint.
 
-### Phase 7 — API & external tools ✅ built
-> Built Nov 2026. Notes: tokens are `rxt_` + 256 random bits, stored as a hash (shown once), role viewer or contributor only (never admin/owner), expiry 30d / 90d / 1y / never, revocable, max 50 active; the API is `/api/v1`, read-only, bearer-token only (browser sessions and tokens are kept apart); a contributor token may read secret values through a separate, always-audited `reveal` call; job URLs/headers/bodies and URL query strings are never returned; 300 requests/minute per token and a lock-out after 20 wrong tokens per address; lockdown mode and the IP allowlist apply; usage is audited (every reveal individually, other use at most every 10 minutes per token). API docs live on the **API** page in the UI and in the README; a machine-readable OpenAPI file is not generated yet.
-- API tokens (create / revoke, role-based, audit-logged).
-- Public REST API by project key (project info, health, jobs, expiring secrets — no secret values unless the token's role allows).
-- API docs page.
+**4. App side** (set once per project, in the deployment platform)
+- Env vars: `REXUS_URL`, `REXUS_TOKEN`.
+- Start command:
+  ```bash
+  curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" "$REXUS_URL/api/v1/env" > .env && node server.js
+  ```
+  `-f` makes startup fail when Rexus can't be reached, instead of running with no secrets.
+- README gets copy-paste examples (Node, Docker entrypoint, a VPS/systemd service).
+- **Note:** fetch at **startup**, not at build time — values fetched during a build can end up inside the Docker image or the frontend bundle.
 
-**Done when:** an external tool (e.g. a CRM) can fetch a project's status using its project key.
+**5. Tests**
+- Deploy token sees only its scope: not other environments, other services, the project's own secrets when scoped to a service, or other projects.
+- Deploy token gets `403` on every other `/api/v1` route; API token gets `403` on `/env`.
+- Revoked / expired tokens stop working; lockdown mode blocks them.
+- `.env` escaping round-trips values with quotes, `$`, `#`, spaces and newlines.
+- Deleting the project/service/environment removes its deploy tokens.
+- Backup → restore still works with the new columns.
+
+**Done when:** a project on a cloud platform starts with only `REXUS_URL` + `REXUS_TOKEN` set, and after changing a secret in the Vault and restarting, the app uses the new value.
+
+### Phase 10 — Rexus updates secrets in deployments (future)
+
+When a secret changes in the Vault, Rexus pushes it into the deployment's platform env vars (e.g. Vercel, Render, Railway, GitHub Actions secrets) and optionally triggers a redeploy. Platform API keys stored encrypted in the Vault. Not designed yet — decide platforms first.
 
 ### Later (not planned in detail yet)
 - Mail system (§8).
 - Cloud backup targets (S3 / R2 / Backblaze / Drive).
 - Vault seal/unseal mode.
-- Per-project access.
+- Per-project access for users.
+- Explicit secret sharing between services; job credentials bound to vault secrets; per-service alert routing; cross-project moves.
 - MIT license + public open-source release.
