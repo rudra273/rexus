@@ -212,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	// Health checks (system jobs: always on, regardless of the scheduler module)
 	mux.HandleFunc("GET /api/checks", s.authed(s.handleListChecks))
 	mux.HandleFunc("GET /api/checks/series", s.authed(s.handleAllChecksSeries))
+	mux.HandleFunc("GET /api/checks/events", s.authed(s.handleRecentCheckEvents))
 	mux.HandleFunc("GET /api/projects/{key}/checks", s.authed(s.handleListProjectChecks))
 	mux.HandleFunc("POST /api/projects/{key}/checks", s.authed(s.handleCreateCheck))
 	mux.HandleFunc("GET /api/checks/{id}", s.authed(s.handleGetCheck))

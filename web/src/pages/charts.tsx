@@ -8,18 +8,28 @@ interface Slot {
   end: number
   ok: number
   fail: number
+  msSum: number // sum of (avg_ms × probes) over buckets that reported a response time
+  msN: number // probes behind msSum
+  maxMs: number | null
 }
 
 /** Splits the last `windowSeconds` into `n` equal slots and adds each bucket to the slot it falls in. */
 export function toSlots(buckets: SeriesBucket[], windowSeconds: number, n: number, now = Date.now()): Slot[] {
   const size = (windowSeconds * 1000) / n
   const start = now - windowSeconds * 1000
-  const slots: Slot[] = Array.from({ length: n }, (_, i) => ({ start: start + i * size, end: start + (i + 1) * size, ok: 0, fail: 0 }))
+  const slots: Slot[] = Array.from({ length: n }, (_, i) => ({ start: start + i * size, end: start + (i + 1) * size, ok: 0, fail: 0, msSum: 0, msN: 0, maxMs: null }))
   for (const b of buckets) {
     const i = Math.floor((new Date(b.t).getTime() - start) / size)
     const s = slots[Math.min(Math.max(i, 0), n - 1)]
     s.ok += b.ok
     s.fail += b.fail
+    if (b.avg_ms != null) {
+      const n = b.ok + b.fail || 1
+      s.msSum += b.avg_ms * n
+      s.msN += n
+      const hi = b.max_ms ?? b.avg_ms
+      s.maxMs = s.maxMs == null ? hi : Math.max(s.maxMs, hi)
+    }
   }
   return slots
 }
@@ -63,23 +73,48 @@ function slotState(s: Slot): { color: string; label: string } {
 
 /**
  * A row of small bars, one per time slot: green = every probe passed, amber = some failed,
- * red = all failed, grey = no data. Each bar has a tooltip, so colour is never the only cue.
+ * red = all failed, grey = no data. Hovering a bar shows its time window, result and response time,
+ * so colour is never the only cue.
  */
 export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', paused }: { buckets: SeriesBucket[]; windowSeconds: number; slots?: number; height?: string; paused?: boolean }) {
   const data = toSlots(buckets, windowSeconds, slots)
+  const [hover, setHover] = useState<number | null>(null)
+  const h = hover != null ? data[hover] : null
+  const hs = h ? slotState(h) : null
+  const frac = hover != null ? (hover + 0.5) / data.length : 0
   return (
-    <div className={cx('flex gap-[2px]', paused && 'opacity-50')} role="img" aria-label={`Uptime over the last ${Math.round(windowSeconds / 3600)} hours`}>
-      {data.map((s) => {
-        const st = slotState(s)
-        return (
+    <div className="relative" onMouseLeave={() => setHover(null)}>
+      <div className={cx('flex gap-[2px]', paused && 'opacity-50')} role="img" aria-label={`Uptime over the last ${Math.round(windowSeconds / 3600)} hours`}>
+        {data.map((s, i) => (
           <div
             key={s.start}
-            className={cx('min-w-0 flex-1 rounded-[3px]', height)}
-            style={{ background: st.color }}
-            title={`${fmtTime(new Date(s.start).toISOString())} – ${st.label}${s.ok + s.fail ? ` (${s.ok + s.fail} checks)` : ''}`}
+            className={cx('min-w-0 flex-1 rounded-[3px] transition-opacity', height, hover != null && hover !== i && 'opacity-60')}
+            style={{ background: slotState(s).color }}
+            onMouseEnter={() => setHover(i)}
           />
-        )
-      })}
+        ))}
+      </div>
+      {h && hs && (
+        <div
+          className="pointer-events-none absolute bottom-full z-10 mb-1.5 whitespace-nowrap rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-zinc-300 shadow-lg"
+          style={{ left: `${frac * 100}%`, transform: `translateX(${frac > 0.7 ? '-100%' : frac < 0.3 ? '0' : '-50%'})` }}
+        >
+          <div className="text-zinc-400">
+            {fmtTime(new Date(h.start).toISOString())} → {fmtTime(new Date(h.end).toISOString())}
+          </div>
+          <div className="flex items-center gap-1.5 font-medium text-zinc-100">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: hs.color }} />
+            {hs.label}
+            {h.ok + h.fail > 0 && <span className="font-normal text-zinc-400">· {h.ok + h.fail} check{h.ok + h.fail === 1 ? '' : 's'}</span>}
+          </div>
+          {h.msN > 0 && (
+            <div className="text-zinc-400">
+              avg {Math.round(h.msSum / h.msN)} ms{h.maxMs != null && <> · max {Math.round(h.maxMs)} ms</>}
+              {h.fail > 0 && <span className="text-red-300"> · {h.fail} failed</span>}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -62,11 +62,12 @@ export default function App() {
         <Route path="/projects/new" element={isAdmin(user.role) ? <ProjectNewPage /> : <Navigate to="/projects" replace />} />
         <Route path="/projects/:key" element={<ProjectDetailPage />} />
         <Route path="/projects/:key/checks/new" element={<CheckFormPage />} />
+        <Route path="/jobs" element={<JobsPage />} />
+        <Route path="/checks/new" element={<CheckFormPage />} />
         <Route path="/checks/:id" element={<CheckDetailPage />} />
         <Route path="/checks/:id/edit" element={<CheckFormPage />} />
         {meta.modules.scheduler && (
           <>
-            <Route path="/jobs" element={<JobsPage />} />
             <Route path="/jobs/new" element={<JobFormPage />} />
             <Route path="/jobs/:id" element={<JobDetailPage />} />
             <Route path="/jobs/:id/edit" element={<JobFormPage />} />
@@ -135,7 +136,7 @@ function Layout() {
     { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
     { to: '/projects', label: 'Projects', icon: 'projects' },
     ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', icon: 'vault' as IconName }] : []),
-    ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', icon: 'jobs' as IconName }] : []),
+    ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Pings', icon: 'pings' as IconName }] : [{ to: '/jobs', label: 'Health', icon: 'pings' as IconName }]),
   ]
   const administration: NavItem[] = admin
     ? [

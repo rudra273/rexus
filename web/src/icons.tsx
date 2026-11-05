@@ -21,7 +21,7 @@ function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
 }
 
 export type IconName =
-  | 'dashboard' | 'projects' | 'vault' | 'jobs' | 'alerts' | 'api' | 'users' | 'audit'
+  | 'dashboard' | 'projects' | 'vault' | 'jobs' | 'pings' | 'alerts' | 'api' | 'users' | 'audit'
   | 'backups' | 'settings' | 'profile' | 'menu' | 'close' | 'refresh' | 'search' | 'grid' | 'list'
 
 export function NavIcon({ name, size }: { name: IconName; size?: number }) {
@@ -51,6 +51,8 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M12 7v5l3 2" />
     </>
   ),
+  // A heartbeat line: something being pinged and answering.
+  pings: <path d="M3 12h4l2.5-7 5 14 2.5-7H21" />,
   alerts: (
     <>
       <path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z" />

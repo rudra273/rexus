@@ -571,7 +571,9 @@ export function CheckFormPage() {
   const editing = !!id
 
   const [loaded, setLoaded] = useState(!editing)
-  const [projectKey, setProjectKey] = useState(key ?? '')
+  const [projectKey, setProjectKey] = useState(key ?? params.get('project') ?? '')
+  const [projects, setProjects] = useState<Project[]>([])
+  const pickProject = !editing && !key // reached from the Pings page: choose which project the check belongs to
   const [serviceId, setServiceId] = useState(params.get('service') ?? '')
   const [environmentId, setEnvironmentId] = useState('')
   const { services } = useServices(projectKey)
@@ -591,6 +593,11 @@ export function CheckFormPage() {
   const [enabled, setEnabled] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!pickProject) return
+    api<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects)).catch((e) => setError(e.message))
+  }, [pickProject])
 
   useEffect(() => {
     if (!id) return
@@ -657,20 +664,34 @@ export function CheckFormPage() {
   return (
     <>
       <PageHeader
-        crumbs={[
-          { label: 'Projects', to: '/projects' },
-          { label: projectKey, to: `/projects/${projectKey}` },
-          { label: 'Health checks', to: `/projects/${projectKey}#checks` },
-          { label: editing ? 'Edit' : 'New check' },
-        ]}
+        crumbs={
+          pickProject
+            ? [{ label: 'Pings', to: '/jobs' }, { label: 'New check' }]
+            : [
+                { label: 'Projects', to: '/projects' },
+                { label: projectKey, to: `/projects/${projectKey}` },
+                { label: 'Health checks', to: `/projects/${projectKey}#checks` },
+                { label: editing ? 'Edit' : 'New check' },
+              ]
+        }
         title={editing ? 'Edit health check' : 'New health check'}
-        subtitle={<>Project: <Link to={`/projects/${projectKey}`} className="text-zinc-300 hover:underline">{projectKey}</Link></>}
+        subtitle={pickProject ? 'Watch a URL: status code, response time and SSL expiry.' : <>Project: <Link to={`/projects/${projectKey}`} className="text-zinc-300 hover:underline">{projectKey}</Link></>}
       />
       <Card className="max-w-2xl p-5">
         <form onSubmit={submit} className="space-y-5">
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Website" required autoFocus />
-          </Field>
+          <div className={cx('grid grid-cols-1 gap-4', pickProject && 'sm:grid-cols-2')}>
+            <Field label="Name">
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Website" required autoFocus />
+            </Field>
+            {pickProject && (
+              <Field label="Project">
+                <Select value={projectKey} onChange={(e) => { setProjectKey(e.target.value); setServiceId(''); setEnvironmentId('') }} required>
+                  <option value="">Choose a project…</option>
+                  {[...projects].sort((a, b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.key}>{p.name}</option>)}
+                </Select>
+              </Field>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Service" hint={services && services.length === 0 ? 'This project has no services — the check belongs to the project.' : undefined}>

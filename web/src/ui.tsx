@@ -248,7 +248,7 @@ export function PageHeader({ title, subtitle, actions, crumbs }: { title: ReactN
         <h1 className="text-xl font-semibold text-zinc-50">{title}</h1>
         {subtitle && <div className="mt-1 text-sm text-zinc-400">{subtitle}</div>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-start gap-2">{actions}</div>}
       </div>
     </div>
   )

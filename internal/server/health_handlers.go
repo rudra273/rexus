@@ -355,3 +355,22 @@ func (s *Server) handleAllChecksSeries(w http.ResponseWriter, r *http.Request, a
 		"series":         series,
 	})
 }
+
+// handleRecentCheckEvents returns recent status changes across every visible check, for the dashboard timeline.
+func (s *Server) handleRecentCheckEvents(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "24h"
+	}
+	spec, ok := seriesRanges[rng]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "range must be 1h, 6h, 24h, 7d or 30d")
+		return
+	}
+	events, err := s.store.ListRecentHealthEvents(r.Context(), s.access(r), spec[0], 200)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"range": rng, "events": events})
+}

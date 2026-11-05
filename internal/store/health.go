@@ -322,6 +322,42 @@ func (s *Store) ListHealthEvents(ctx context.Context, checkID string, limit int)
 	return out, rows.Err()
 }
 
+// RecentHealthEvent is a status change together with the check it belongs to, for the dashboard timeline.
+type RecentHealthEvent struct {
+	HealthEvent
+	CheckID     string `json:"check_id"`
+	CheckName   string `json:"check_name"`
+	ProjectKey  string `json:"project_key"`
+	ProjectName string `json:"project_name"`
+}
+
+// ListRecentHealthEvents returns status changes of every check the caller can see, newest first.
+func (s *Store) ListRecentHealthEvents(ctx context.Context, a Access, window time.Duration, limit int) ([]*RecentHealthEvent, error) {
+	var b filterBuilder
+	b.add("e.at > now() - make_interval(secs => ?::float8)", window.Seconds())
+	b.access("c.project_id", a)
+	args := append(b.args, limit)
+	rows, err := s.Pool.Query(ctx, fmt.Sprintf(`SELECT e.id, e.at, e.from_status, e.to_status, e.message,
+			c.id, c.name, p.key, p.name
+		FROM health_events e
+		JOIN health_checks c ON c.id = e.check_id
+		JOIN projects p ON p.id = c.project_id`+b.sql()+`
+		ORDER BY e.at DESC, e.id DESC LIMIT $%d`, len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*RecentHealthEvent{}
+	for rows.Next() {
+		e := &RecentHealthEvent{}
+		if err := rows.Scan(&e.ID, &e.At, &e.FromStatus, &e.ToStatus, &e.Message, &e.CheckID, &e.CheckName, &e.ProjectKey, &e.ProjectName); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 type HealthUptime struct {
 	Day   *float64 `json:"24h"`
 	Week  *float64 `json:"7d"`
