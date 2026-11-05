@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 import { Link } from 'react-router-dom'
+import { NavIcon } from './icons'
 import { formatDateTime } from './prefs'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
@@ -333,5 +334,31 @@ export function AuthShell({ title, subtitle, children }: { title: string; subtit
         <div className="mt-6">{children}</div>
       </div>
     </div>
+  )
+}
+
+/** "example.com" from a full URL, for compact labels. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+/** An "open in a new tab" link to a project's or service's website. */
+export function WebsiteLink({ url, label, className, title }: { url: string; label?: ReactNode; className?: string; title?: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title ?? `Open ${url}`}
+      aria-label={label ? undefined : `Open website ${hostOf(url)}`}
+      className={cx('inline-flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 hover:underline', className)}
+    >
+      {label}
+      <NavIcon name="external" size={14} />
+    </a>
   )
 }

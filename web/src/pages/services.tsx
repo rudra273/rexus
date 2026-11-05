@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, isAdmin, type Environment, type Project, type Scoped, type Service, type ServiceFilter } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, ErrorBox, Field, Input, Modal, Select, StatusDot, Textarea, cx } from '../ui'
+import { Badge, Button, Card, ErrorBox, Field, Input, Modal, Select, StatusDot, Textarea, WebsiteLink, cx, hostOf } from '../ui'
 
 // Services are optional groups inside a project (frontend, backend, worker…).
 // They organize secrets, jobs and checks; they are not an access boundary.
@@ -154,6 +154,7 @@ export function ProjectServices({ project, services, onChanged }: { project: Pro
                     <span className="truncate font-medium text-zinc-100">{s.name}</span>
                   </div>
                   <div className="mt-0.5 text-xs text-zinc-500 mono">{s.key}</div>
+                  {s.website_url && <WebsiteLink url={s.website_url} label={hostOf(s.website_url)} className="mt-1 max-w-full truncate text-xs" />}
                   {s.repository_url && (
                     <div className="mt-0.5 truncate text-xs text-zinc-500 mono" title={s.repository_url}>
                       {s.repository_url}{s.root_directory ? ` · ${s.root_directory}` : ''}
@@ -197,6 +198,7 @@ function ServiceForm({ project, existing, onClose, onSaved }: { project: Project
   const [keyTouched, setKeyTouched] = useState(!!existing)
   const [description, setDescription] = useState(existing?.description ?? '')
   const [repo, setRepo] = useState(existing?.repository_url ?? '')
+  const [website, setWebsite] = useState(existing?.website_url ?? '')
   const [root, setRoot] = useState(existing?.root_directory ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -207,7 +209,7 @@ function ServiceForm({ project, existing, onClose, onSaved }: { project: Project
     if (renaming && !confirm(`Change the service key "${existing!.key}" → "${key}"?\n\nAPI paths that use the old key stop working.`)) return
     setBusy(true)
     setError(null)
-    const body = { name, key, description, repository_url: repo, root_directory: root }
+    const body = { name, key, description, repository_url: repo, root_directory: root, website_url: website }
     try {
       if (existing) await api(`/api/services/${existing.id}`, { method: 'PATCH', body })
       else await api(`/api/projects/${encodeURIComponent(project.key)}/services`, { method: 'POST', body })
@@ -248,6 +250,9 @@ function ServiceForm({ project, existing, onClose, onSaved }: { project: Project
             />
           </Field>
         </div>
+        <Field label="Website (optional)" hint="Where this service is reachable — shows as a quick link on the project page.">
+          <Input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className="mono" placeholder="https://app.example.com" />
+        </Field>
         <Field label="Description (optional)">
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} />
         </Field>

@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, canWrite, isAdmin, type Job, type Project } from '../api'
 import { useAuth } from '../auth'
 import { NavIcon } from '../icons'
-import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, cx, type DotStatus } from '../ui'
+import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, WebsiteLink, cx, hostOf, type DotStatus } from '../ui'
 import { JobTable } from './jobs'
 import { ProjectChecks } from './health'
 import { ProjectVault } from './vault'
@@ -170,9 +170,10 @@ export function ProjectsPage() {
       ) : view === 'grid' ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {shown.map((p) => (
-            <Link key={p.id} to={`/projects/${p.key}`}>
+            <div key={p.id} className="relative">
+            <Link to={`/projects/${p.key}`} className="block h-full">
               <Card className="h-full p-4 transition hover:border-zinc-600">
-                <div className="flex items-center gap-2">
+                <div className={cx('flex items-center gap-2', p.website_url && 'pr-8')}>
                   <StatusDot status={projectDot(p)} />
                   <span className="truncate font-medium text-zinc-100">{p.name}</span>
                 </div>
@@ -186,6 +187,10 @@ export function ProjectsPage() {
                 </div>
               </Card>
             </Link>
+            {p.website_url && (
+              <WebsiteLink url={p.website_url} className="absolute right-3 top-3.5 rounded p-1 text-zinc-400 hover:bg-zinc-800" title={`Open ${hostOf(p.website_url)}`} />
+            )}
+            </div>
           ))}
         </div>
       ) : (
@@ -195,6 +200,7 @@ export function ProjectsPage() {
               <tr>
                 <th className="px-4 py-2 font-medium">Project</th>
                 <th className="px-4 py-2 font-medium">Health</th>
+                <th className="px-4 py-2 font-medium">Website</th>
                 <th className="px-4 py-2 text-right font-medium">Checks</th>
                 {scheduler && <th className="px-4 py-2 text-right font-medium">Jobs</th>}
                 {scheduler && <th className="px-4 py-2 text-right font-medium">Failing</th>}
@@ -214,6 +220,7 @@ export function ProjectsPage() {
                     </Link>
                   </td>
                   <td className="px-4 py-2"><HealthTag p={p} /></td>
+                  <td className="px-4 py-2 text-xs">{p.website_url ? <WebsiteLink url={p.website_url} label={hostOf(p.website_url)} /> : <span className="text-zinc-600">—</span>}</td>
                   <td className="px-4 py-2 text-right text-zinc-300">{p.check_count}</td>
                   {scheduler && <td className="px-4 py-2 text-right text-zinc-300">{p.job_count}</td>}
                   {scheduler && <td className={cx('px-4 py-2 text-right', p.failing_jobs > 0 ? 'text-red-400' : 'text-zinc-500')}>{p.failing_jobs}</td>}
@@ -233,6 +240,7 @@ export function ProjectNewPage() {
   const [key, setKey] = useState('')
   const [keyTouched, setKeyTouched] = useState(false)
   const [description, setDescription] = useState('')
+  const [website, setWebsite] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -241,7 +249,7 @@ export function ProjectNewPage() {
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ project: Project }>('/api/projects', { method: 'POST', body: { name, key, description } })
+      const r = await api<{ project: Project }>('/api/projects', { method: 'POST', body: { name, key, description, website_url: website } })
       navigate(`/projects/${r.project.key}`)
     } catch (err) {
       setError((err as Error).message)
@@ -276,6 +284,9 @@ export function ProjectNewPage() {
               className="mono"
               required
             />
+          </Field>
+          <Field label="Website (optional)" hint="For quick access — shows as a link on the dashboard and project pages.">
+            <Input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className="mono" placeholder="https://app.example.com" />
           </Field>
           <Field label="Description (optional)">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
@@ -355,15 +366,25 @@ export function ProjectDetailPage() {
         title={project.name}
         subtitle={<span className="mono">{project.key}{project.owner_only && <span className="ml-2 rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}</span>}
         actions={
-          admin && !editing && (
-            <ActionMenu
-              items={[
-                { label: 'Edit project', onClick: () => setEditing(true) },
-                { label: 'Access…', onClick: () => setAccessOpen(true) },
-                { label: 'Delete project', onClick: remove, danger: true },
-              ]}
-            />
-          )
+          <>
+            {project.website_url && (
+              <a href={project.website_url} target="_blank" rel="noopener noreferrer" title={`Open ${project.website_url}`}>
+                <Button variant="secondary">
+                  {hostOf(project.website_url)}
+                  <NavIcon name="external" size={14} />
+                </Button>
+              </a>
+            )}
+            {admin && !editing && (
+              <ActionMenu
+                items={[
+                  { label: 'Edit project', onClick: () => setEditing(true) },
+                  { label: 'Access…', onClick: () => setAccessOpen(true) },
+                  { label: 'Delete project', onClick: remove, danger: true },
+                ]}
+              />
+            )}
+          </>
         }
       />
       {editing ? (
@@ -424,6 +445,7 @@ function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onC
   const [name, setName] = useState(project.name)
   const [key, setKey] = useState(project.key)
   const [description, setDescription] = useState(project.description)
+  const [website, setWebsite] = useState(project.website_url ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const renaming = key !== project.key
@@ -434,7 +456,7 @@ function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onC
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ project: Project }>(`/api/projects/${project.key}`, { method: 'PATCH', body: { name, key, description } })
+      const r = await api<{ project: Project }>(`/api/projects/${project.key}`, { method: 'PATCH', body: { name, key, description, website_url: website } })
       onSaved(r.project)
     } catch (err) {
       setError((err as Error).message)
@@ -457,6 +479,9 @@ function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onC
             Tools using <code>{project.key}</code> (e.g. your CRM) must be updated after renaming.
           </div>
         )}
+        <Field label="Website" hint="For quick access — shows as a link on the dashboard and project pages. Leave empty for none.">
+          <Input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className="mono" placeholder="https://app.example.com" />
+        </Field>
         <Field label="Description">
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
         </Field>

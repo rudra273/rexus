@@ -21,6 +21,7 @@ type Service struct {
 	Name          string    `json:"name"`
 	Description   string    `json:"description"`
 	RepositoryURL *string   `json:"repository_url"`
+	WebsiteURL    *string   `json:"website_url"` // where this service is reachable, for quick access
 	RootDirectory *string   `json:"root_directory"`
 	SecretCount   int       `json:"secret_count"`
 	JobCount      int       `json:"job_count"`
@@ -55,7 +56,7 @@ func NormalizeServiceKey(key string) (string, error) {
 }
 
 const serviceSelect = `SELECT sv.id, sv.project_id, p.key, sv.key, sv.name, sv.description, sv.repository_url,
-	sv.root_directory, sv.created_at, sv.updated_at,
+	sv.website_url, sv.root_directory, sv.created_at, sv.updated_at,
 	(SELECT count(*) FROM secrets s WHERE s.service_id = sv.id),
 	(SELECT count(*) FROM jobs j WHERE j.service_id = sv.id),
 	(SELECT count(*) FROM jobs j WHERE j.service_id = sv.id AND j.enabled AND j.last_status = 'failed'),
@@ -69,7 +70,7 @@ const serviceSelect = `SELECT sv.id, sv.project_id, p.key, sv.key, sv.name, sv.d
 func scanService(row interface{ Scan(...any) error }) (*Service, error) {
 	x := &Service{}
 	err := row.Scan(&x.ID, &x.ProjectID, &x.ProjectKey, &x.Key, &x.Name, &x.Description, &x.RepositoryURL,
-		&x.RootDirectory, &x.CreatedAt, &x.UpdatedAt, &x.SecretCount, &x.JobCount, &x.FailingJobs, &x.CheckCount,
+		&x.WebsiteURL, &x.RootDirectory, &x.CreatedAt, &x.UpdatedAt, &x.SecretCount, &x.JobCount, &x.FailingJobs, &x.CheckCount,
 		&x.HealthStatus)
 	if err != nil {
 		return nil, notFound(err)
@@ -106,11 +107,11 @@ func (s *Store) ServiceByKey(ctx context.Context, projectID, key string) (*Servi
 func (s *Store) CreateService(ctx context.Context, x *Service, createdBy string) (*Service, error) {
 	var id string
 	err := s.Pool.QueryRow(ctx, `INSERT INTO services (project_id, key, name, description, repository_url,
-			root_directory, position, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6,
-			COALESCE((SELECT max(position) + 1 FROM services WHERE project_id = $1), 0), $7)
+			root_directory, website_url, position, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7,
+			COALESCE((SELECT max(position) + 1 FROM services WHERE project_id = $1), 0), $8)
 		RETURNING id`,
-		x.ProjectID, x.Key, x.Name, x.Description, x.RepositoryURL, x.RootDirectory, createdBy).Scan(&id)
+		x.ProjectID, x.Key, x.Name, x.Description, x.RepositoryURL, x.RootDirectory, x.WebsiteURL, createdBy).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -122,8 +123,8 @@ func (s *Store) CreateService(ctx context.Context, x *Service, createdBy string)
 
 func (s *Store) UpdateService(ctx context.Context, x *Service) (*Service, error) {
 	tag, err := s.Pool.Exec(ctx, `UPDATE services SET key = $2, name = $3, description = $4, repository_url = $5,
-			root_directory = $6, updated_at = now()
-		WHERE id = $1`, x.ID, x.Key, x.Name, x.Description, x.RepositoryURL, x.RootDirectory)
+			root_directory = $6, website_url = $7, updated_at = now()
+		WHERE id = $1`, x.ID, x.Key, x.Name, x.Description, x.RepositoryURL, x.RootDirectory, x.WebsiteURL)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict

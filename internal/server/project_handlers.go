@@ -56,6 +56,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 		Key         string `json:"key"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		WebsiteURL  string `json:"website_url"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -75,7 +76,12 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	p, err := s.store.CreateProject(r.Context(), key, name, desc, a.user.ID)
+	website, err := validateWebsiteURL(in.WebsiteURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	p, err := s.store.CreateProject(r.Context(), key, name, desc, website, a.user.ID)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, "project key '"+key+"' is already taken")
 		return
@@ -100,6 +106,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 		Key         *string `json:"key"`
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
+		WebsiteURL  *string `json:"website_url"` // omitted = unchanged; "" = clear
 		OwnerOnly   *bool   `json:"owner_only"`
 	}
 	if !decodeJSON(w, r, &in) {
@@ -111,7 +118,13 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 		return
 	}
 	var err error
-	key, name, desc := p.Key, p.Name, p.Description
+	key, name, desc, website := p.Key, p.Name, p.Description, p.WebsiteURL
+	if in.WebsiteURL != nil {
+		if website, err = validateWebsiteURL(*in.WebsiteURL); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if in.Key != nil {
 		if key, err = store.NormalizeProjectKey(*in.Key); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -130,7 +143,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 			return
 		}
 	}
-	updated, err := s.store.UpdateProject(r.Context(), p.ID, key, name, desc)
+	updated, err := s.store.UpdateProject(r.Context(), p.ID, key, name, desc, website)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, "project key '"+key+"' is already taken")
 		return

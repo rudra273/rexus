@@ -70,6 +70,7 @@ export interface Project {
   key: string
   name: string
   description: string
+  website_url: string | null // where the project lives, for quick access
   created_at: string
   updated_at: string
   job_count: number
@@ -89,6 +90,7 @@ export interface Service {
   name: string
   description: string
   repository_url: string | null
+  website_url: string | null // where this service is reachable, for quick access
   root_directory: string | null
   secret_count: number
   job_count: number

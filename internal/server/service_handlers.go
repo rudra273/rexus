@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -22,6 +23,20 @@ type serviceInput struct {
 	Description   string  `json:"description"`
 	RepositoryURL *string `json:"repository_url"`
 	RootDirectory *string `json:"root_directory"`
+	WebsiteURL    *string `json:"website_url"` // omitted = unchanged; "" = clear
+}
+
+// validateWebsiteURL accepts an empty value (no link) or a full http:// or https:// address.
+func validateWebsiteURL(v string) (*string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || utf8.RuneCountInString(v) > 500 || strings.ContainsAny(v, "\r\n\t ") {
+		return nil, errors.New("website must be a full http:// or https:// address (at most 500 characters)")
+	}
+	return &v, nil
 }
 
 func optionalText(p *string, max int, what string) (*string, error) {
@@ -60,6 +75,11 @@ func (in *serviceInput) apply(x *store.Service) error {
 		return err
 	}
 	x.Key, x.Name, x.Description, x.RepositoryURL, x.RootDirectory = key, name, desc, repo, root
+	if in.WebsiteURL != nil {
+		if x.WebsiteURL, err = validateWebsiteURL(*in.WebsiteURL); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

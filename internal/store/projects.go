@@ -13,6 +13,7 @@ type Project struct {
 	Key         string    `json:"key"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
+	WebsiteURL  *string   `json:"website_url"` // where the project lives, for quick access
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	JobCount    int       `json:"job_count"`
@@ -40,7 +41,7 @@ func NormalizeProjectKey(key string) (string, error) {
 	return key, nil
 }
 
-const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.created_at, p.updated_at,
+const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.website_url, p.created_at, p.updated_at,
 	(SELECT count(*) FROM jobs j WHERE j.project_id = p.id),
 	(SELECT count(*) FROM jobs j WHERE j.project_id = p.id AND j.enabled AND j.last_status = 'failed'),
 	COALESCE((SELECT CASE WHEN bool_or(c.status = 'down') THEN 'down'
@@ -54,7 +55,7 @@ const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.created_at, 
 
 func scanProject(row interface{ Scan(...any) error }) (*Project, error) {
 	p := &Project{}
-	err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt, &p.JobCount, &p.FailingJobs,
+	err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Description, &p.WebsiteURL, &p.CreatedAt, &p.UpdatedAt, &p.JobCount, &p.FailingJobs,
 		&p.HealthStatus, &p.CheckCount, &p.ServiceCount, &p.OwnerOnly)
 	if err != nil {
 		return nil, notFound(err)
@@ -83,7 +84,7 @@ func (s *Store) ProjectByKey(ctx context.Context, key string) (*Project, error) 
 	return scanProject(s.Pool.QueryRow(ctx, projectSelect+` WHERE p.key = $1`, strings.ToLower(key)))
 }
 
-func (s *Store) CreateProject(ctx context.Context, key, name, description, createdBy string) (*Project, error) {
+func (s *Store) CreateProject(ctx context.Context, key, name, description string, websiteURL *string, createdBy string) (*Project, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -91,8 +92,8 @@ func (s *Store) CreateProject(ctx context.Context, key, name, description, creat
 	defer tx.Rollback(ctx)
 
 	var id string
-	err = tx.QueryRow(ctx, `INSERT INTO projects (key, name, description, created_by)
-		VALUES ($1, $2, $3, $4) RETURNING id`, key, name, description, createdBy).Scan(&id)
+	err = tx.QueryRow(ctx, `INSERT INTO projects (key, name, description, website_url, created_by)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, key, name, description, websiteURL, createdBy).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -112,9 +113,9 @@ func (s *Store) CreateProject(ctx context.Context, key, name, description, creat
 
 // UpdateProject changes name/description and optionally renames the key.
 // After a rename the old key simply stops working (plan.md §1.1).
-func (s *Store) UpdateProject(ctx context.Context, id, key, name, description string) (*Project, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE projects SET key = $2, name = $3, description = $4, updated_at = now()
-		WHERE id = $1`, id, key, name, description)
+func (s *Store) UpdateProject(ctx context.Context, id, key, name, description string, websiteURL *string) (*Project, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE projects SET key = $2, name = $3, description = $4, website_url = $5, updated_at = now()
+		WHERE id = $1`, id, key, name, description, websiteURL)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict

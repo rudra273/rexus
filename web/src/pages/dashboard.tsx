@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api, isAdmin, type AlertChannel, type AlertRecord, type BackupStatus, type HealthStatus, type HealthCheck, type Job, type Project, type Secret, type SeriesBucket } from '../api'
 import { useAuth } from '../auth'
 import { NavIcon } from '../icons'
-import { Badge, Button, Card, Empty, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
+import { Badge, Button, Card, Empty, PageHeader, Select, Spinner, StatusDot, WebsiteLink, cx, fmtTime, hostOf, timeAgo } from '../ui'
 import { backupLabel } from './backups'
 import { fmtDuration, Sparkline, UptimeBar, uptimeOf } from './charts'
 import { degradedReason, fmtPct, HealthBadge } from './health'
@@ -386,11 +386,14 @@ function ProjectHealthCard({ project: p, checks, series, now, range }: { project
   return (
     <Card className="p-4">
       <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
         <Link to={`/projects/${p.key}`} className="group flex min-w-0 items-center gap-2.5">
           <StatusDot status={p.health_status} />
           <span className="truncate text-base font-semibold text-zinc-50 group-hover:underline">{p.name}</span>
           {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} job{p.failing_jobs === 1 ? '' : 's'} failing</Badge>}
         </Link>
+        {p.website_url && <WebsiteLink url={p.website_url} title={`Open ${hostOf(p.website_url)}`} className="shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-800" />}
+        </div>
         <div className="shrink-0 text-right">
           <div className="text-lg font-semibold text-zinc-50">{fmtPct(uptime)}</div>
           <div className="text-[11px] text-zinc-500">uptime, {range.label}</div>

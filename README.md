@@ -68,6 +68,8 @@ Whoever can run commands on the server can recover the owner — no secret owner
 
 ## Services (optional)
 
+Projects and services each have an optional **Website** link (set it when creating or editing). It shows as a one-click link on the Projects list, the project page, the dashboard's project cards and the service cards — handy for jumping straight to the live site. It must be a full `http://` or `https://` address and is for convenience only; Rexus doesn't call it (use a health check to monitor it).
+
 A project can be split into **services** — e.g. `frontend`, `backend`, `worker` — when it has several parts. Simple projects don't need any: secrets, jobs and health checks can always belong to the project directly.
 
 - Each secret, job and check belongs to the project directly *or* to one service. Environments (`dev`, `staging`, `prod`, …) stay project-wide and are shared by all services; jobs and checks can optionally be tied to one.
