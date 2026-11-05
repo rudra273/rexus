@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, type ApiToken } from '../api'
+import { DeployTokensOverview } from './deploy_tokens'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, cx, fmtTime, timeAgo } from '../ui'
 
 const STATUS_TONE = { active: 'green', expired: 'amber', revoked: 'zinc' } as const
@@ -103,6 +104,8 @@ export function IntegrationsPage() {
           Tokens are shown once, when you create them — only a hash is stored. Every use shows up in the audit log under the token’s name.
         </p>
       </section>
+
+      <DeployTokensOverview canRevoke />
 
       <ApiDocs />
 
@@ -235,8 +238,18 @@ const ENDPOINTS: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/health',
     role: 'any token',
-    summary: 'Check that your token works. Returns the token’s name and role.',
+    summary: 'Check that your token works. Returns the token’s name and role (and, for a deploy token, its project, environment and service).',
     example: `{ "ok": true, "token": { "name": "CRM status sync", "role": "viewer", "expires_at": null }, "time": "2026-11-05T12:00:00Z" }`,
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/env',
+    role: 'deploy token only',
+    summary: 'The current value of every secret in the deploy token’s scope (its project, environment and service) — nothing else. Returns a .env file; add ?format=json for JSON. Call it once when your app starts. Every call is audited. API tokens get 403 here, and deploy tokens get 403 everywhere except this and /api/v1/health.',
+    example: `curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" $REXUS_URL/api/v1/env > .env
+
+DATABASE_URL="postgres://…"
+STRIPE_KEY="sk_live_…"`,
   },
   {
     method: 'GET',

@@ -236,6 +236,7 @@ export interface SecretVersion {
 
 export interface ApiToken {
   id: string
+  kind: 'api' | 'deploy'
   name: string
   prefix: string
   role: 'contributor' | 'viewer'
@@ -246,6 +247,11 @@ export interface ApiToken {
   last_used_ip: string | null
   revoked_at: string | null
   status: 'active' | 'expired' | 'revoked'
+  // Deploy tokens only: the one place they can read from.
+  project: string | null
+  project_name: string | null
+  service: string | null
+  environment: string | null
 }
 
 export interface BackupSettings {

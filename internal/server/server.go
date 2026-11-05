@@ -166,9 +166,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tokens", s.authed(s.handleListTokens))
 	mux.HandleFunc("POST /api/tokens", s.authed(s.handleCreateToken))
 	mux.HandleFunc("DELETE /api/tokens/{id}", s.authed(s.handleRevokeToken))
+	mux.HandleFunc("GET /api/deploy-tokens", s.authed(s.handleListDeployTokens))
+	mux.HandleFunc("POST /api/deploy-tokens", s.authed(s.handleCreateDeployToken))
 
 	// Public API for other tools: API token only, never a browser session.
-	mux.HandleFunc("GET /api/v1/health", s.apiToken(s.handleV1Health))
+	mux.HandleFunc("GET /api/v1/health", s.anyToken(s.handleV1Health))
+	mux.HandleFunc("GET /api/v1/env", s.deployToken(s.handleV1Env))
 	mux.HandleFunc("GET /api/v1/projects", s.apiToken(s.handleV1Projects))
 	mux.HandleFunc("GET /api/v1/projects/{key}", s.apiToken(s.handleV1Project))
 	mux.HandleFunc("GET /api/v1/projects/{key}/status", s.apiToken(s.handleV1Status))

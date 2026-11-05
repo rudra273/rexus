@@ -96,6 +96,21 @@ The **Dashboard** lists everything that needs attention across all projects — 
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
+## Deploy tokens: apps load their env at startup
+
+A **deploy token** lets one app fetch its own environment variables from the Vault when it starts. Update a secret in Rexus → restart the deployment → the app gets the new value. Rexus is contacted once per start, never per user request; while the app runs, Rexus can be offline.
+
+Create one on the project's page, under **Deploy tokens** (owner, admin or contributor): pick the environment (and a service, if the project has them). The token reads only that scope's secrets — nothing else in Rexus. Then, in your deployment platform:
+
+1. Set `REXUS_URL` (your public Rexus address) and `REXUS_TOKEN`.
+2. Make the start command load the env first:
+
+```bash
+curl -fsS -H "Authorization: Bearer $REXUS_TOKEN" "$REXUS_URL/api/v1/env" > .env && node server.js
+```
+
+`-f` makes the start fail when Rexus can't be reached, instead of running without secrets. Fetch at **startup**, not during the build: build-time values can end up inside a Docker image or a frontend bundle. Each call is audited. `?format=json` returns exact JSON; the `.env` output quotes values so Node's `--env-file`, the dotenv packages and Docker Compose read them the same way. Revoke a token any time on the project page or the **API** page.
+
 ## API for other tools (CRM, CI, status boards)
 
 Owners and admins create **API tokens** under **API** in the sidebar. A tool then reads a project's status by its **project key** — for example a CRM that stores `acme-web` against a client and shows a green or red badge.
@@ -119,6 +134,7 @@ curl -s -H "Authorization: Bearer $REXUS_TOKEN" $REXUS_URL/api/v1/projects/acme-
 | Endpoint | Returns |
 |---|---|
 | `GET /api/v1/health` | Checks the token works; shows its name and role |
+| `GET /api/v1/env` | **Deploy tokens only.** The token's environment variables as a `.env` file (`?format=json` for JSON) |
 | `GET /api/v1/projects` | All projects with their status |
 | `GET /api/v1/projects/{key}/status` | The compact answer: overall status and counts |
 | `GET /api/v1/projects/{key}` | Everything: services, checks, jobs, secrets expiring in 30 days |

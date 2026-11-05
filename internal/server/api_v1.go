@@ -264,9 +264,10 @@ func (s *Server) v1Secrets(r *http.Request, f store.SecretFilter, t *store.APITo
 // handleV1Health lets a tool check that its token works.
 func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request, t *store.APIToken) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":    true,
-		"token": map[string]any{"name": t.Name, "role": t.Role, "expires_at": t.ExpiresAt},
-		"time":  time.Now().UTC(),
+		"ok": true,
+		"token": map[string]any{"name": t.Name, "kind": t.Kind, "role": t.Role, "expires_at": t.ExpiresAt,
+			"project": t.ProjectKey, "service": t.ServiceKey, "environment": t.EnvironmentName},
+		"time": time.Now().UTC(),
 	})
 }
 

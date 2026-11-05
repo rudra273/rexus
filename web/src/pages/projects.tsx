@@ -7,6 +7,7 @@ import { JobTable } from './jobs'
 import { degradedReason, ProjectChecks } from './health'
 import { ExpiryBadge, ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
+import { ProjectDeployTokens } from './deploy_tokens'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -339,6 +340,8 @@ export function ProjectDetailPage() {
       <ProjectChecks project={project} services={services} scope={scope} />
 
       {meta?.modules.vault && <ProjectVault project={project} services={services} scope={scope} onChanged={reloadServices} />}
+
+      {meta?.modules.vault && <ProjectDeployTokens project={project} services={services} writable={writable} />}
 
       {meta?.modules.scheduler && (
         <section className="mt-8">

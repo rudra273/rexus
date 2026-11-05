@@ -15,7 +15,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request, a *aut
 	if !requireAdmin(w, a) {
 		return
 	}
-	tokens, err := s.store.ListTokens(r.Context())
+	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindAPI, "")
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -55,7 +55,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a *au
 		t := time.Now().Add(time.Duration(*in.ExpiresInDays) * 24 * time.Hour)
 		expires = &t
 	}
-	if n, err := s.store.CountActiveTokens(r.Context()); err != nil {
+	if n, err := s.store.CountActiveTokens(r.Context(), store.TokenKindAPI); err != nil {
 		s.internalError(w, r, err)
 		return
 	} else if n >= maxActiveTokens {
@@ -79,12 +79,27 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a *au
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireAdmin(w, a) {
-		return
-	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	if !store.IsUUID(id) {
 		writeError(w, http.StatusNotFound, "token not found")
+		return
+	}
+	// Deploy tokens are managed by whoever can edit secrets; API tokens by owner/admin only.
+	existing, err := s.store.TokenByID(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "token not found (or already revoked)")
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if existing.Kind == store.TokenKindDeploy {
+		if !canWrite(a.user.Role) {
+			writeError(w, http.StatusForbidden, "your role can't revoke deploy tokens")
+			return
+		}
+	} else if !requireAdmin(w, a) {
 		return
 	}
 	t, err := s.store.RevokeToken(r.Context(), id)

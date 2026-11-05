@@ -179,3 +179,26 @@ func TestAggregateStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderDotenv(t *testing.T) {
+	got := renderDotenv(map[string]string{
+		"B_KEY":    `plain`,
+		"A_KEY":    `with "quotes" and $HOME and # hash\ and spaces`,
+		"C_PEM":    "-----BEGIN KEY-----\nabc\r\n-----END KEY-----",
+		"D_APOS":   `it's fine`,
+		"E_HARD":   "it's \"hard\"\nand $x",
+		"bad-name": "x",
+	})
+	want := "A_KEY='with \"quotes\" and $HOME and # hash\\ and spaces'\n" +
+		"B_KEY='plain'\n" +
+		"C_PEM=\"-----BEGIN KEY-----\\nabc\\r\\n-----END KEY-----\"\n" +
+		"D_APOS=\"it's fine\"\n" +
+		"E_HARD=\"it's \\\"hard\\\"\\nand \\$x\"\n" +
+		"# skipped \"bad-name\": not a valid variable name\n"
+	if got != want {
+		t.Fatalf("dotenv output:\n got %q\nwant %q", got, want)
+	}
+	if renderDotenv(map[string]string{}) != "" {
+		t.Fatal("an empty scope must produce an empty file")
+	}
+}

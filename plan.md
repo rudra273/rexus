@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–7 + services built.** Next: Phase 8 (Cloudflare Tunnel), Phase 9 (deploy tokens — apps load their env from Rexus at startup), Phase 10 (project access per user); see §13.
+Status: **Phases 1–7 + services built.** Phase 9 (deploy tokens) is built. Next: finish Phase 8 (Cloudflare Access) and Phase 10 (project access per user); see §13.
 
 ---
 
@@ -440,7 +440,7 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 **Built:** Phases 1–7 (foundation + keepalive jobs, Vault, team, health checks + dashboard, alerts, backups, read-only API) and optional **services** per project. How they work is in the README and in §1–12 above; the detailed build notes are in git history.
 
-**Next:** Phase 8 (Cloudflare Tunnel) → Phase 9 (deploy tokens: apps load their env from Rexus at startup) → Phase 10 (project access per user). Phase 11 (Rexus pushes secrets into deployments) is future.
+**Built since:** Phase 9 (deploy tokens). **Next:** Phase 8 (Cloudflare Tunnel — setup, no code; Access still to do) → Phase 10 (project access per user). Phase 11 (Rexus pushes secrets into deployments) is future.
 
 ### Phase 8 — Public HTTPS address with Cloudflare Tunnel
 
@@ -465,7 +465,8 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 
 **Done when:** `curl https://rexus.example.com/api/v1/health -H "Authorization: Bearer …"` works from outside, and the UI asks for Cloudflare Access login first.
 
-### Phase 9 — Deploy tokens: apps load their env at startup
+### Phase 9 — Deploy tokens: apps load their env at startup ✅ built
+> Built Nov 2026. Notes: deploy tokens are `api_tokens` rows with `kind='deploy'` (migration `0009_deploy_tokens.sql`); the scope is one project + one environment + optional service, enforced by database constraints (composite foreign keys, cascade on delete); a deploy token is always role contributor internally and is refused by every `/api/v1` route except `/env` and `/health`; API tokens are refused on `/env`; whoever can edit secrets (owner, admin, contributor) creates and revokes them, every role can see the list; max 100 active, expiry 90 days / 1 year / never; every `/env` call is audited (`env.fetch`, counts only); the `.env` output uses single quotes (read literally by Node `--env-file`, the dotenv packages and Compose), double quotes with `\n` only for line breaks, and `?format=json` is always exact; the UI is a **Deploy tokens** section on the project page plus an overview on the **API** page. Verified end to end against a real database (scope isolation, 403s, revoke, cascade, Node parser round-trip). Not built: `rexus env` / `rexus run` CLI (the `curl` start command is enough for now).
 
 **The flow:**
 ```
@@ -486,7 +487,7 @@ GET /api/v1/env                → text/plain, .env format
 GET /api/v1/env?format=json    → {"KEY": "value", …}
 ```
 - Returns the **current version** of every secret in the token's project + environment (+ service, if set). Nothing else: no notes, tags, history.
-- `.env` output: `KEY="value"` with quotes/newlines escaped so any value round-trips; sorted by name.
+- `.env` output: one `KEY='value'` line per secret, sorted by name (single quotes are read literally by every common parser); values with line breaks use double quotes and `\n`. `?format=json` is exact for anything.
 - `Cache-Control: no-store`.
 - Audit-logged on **every** call: token, IP, number of secrets (not names/values).
 - Empty scope returns an empty file with `200` (not an error).

@@ -18,6 +18,7 @@ const (
 	tokenPrefix        = "rxt_"
 	tokenRatePerMinute = 300
 	maxActiveTokens    = 50
+	maxDeployTokens    = 100
 	usageAuditEvery    = 10 * time.Minute
 )
 
@@ -82,9 +83,23 @@ func (l *rateLimiter) Allow(key string, now time.Time) (ok bool, remaining int, 
 
 type tokenHandler func(w http.ResponseWriter, r *http.Request, t *store.APIToken)
 
-// apiToken guards the public API: it accepts only an API token — never a
-// browser session — and refuses revoked, expired or unknown tokens.
+// apiToken guards the public API for ordinary API tokens. It accepts only a
+// token — never a browser session — and refuses revoked, expired or unknown
+// ones. A deploy token is refused here: it may only fetch its own env.
 func (s *Server) apiToken(h tokenHandler) http.HandlerFunc {
+	return s.tokenAuth(store.TokenKindAPI, h)
+}
+
+// deployToken guards GET /api/v1/env: only a deploy token gets in.
+func (s *Server) deployToken(h tokenHandler) http.HandlerFunc {
+	return s.tokenAuth(store.TokenKindDeploy, h)
+}
+
+// anyToken is for the few endpoints every kind of token may call (health).
+func (s *Server) anyToken(h tokenHandler) http.HandlerFunc { return s.tokenAuth("", h) }
+
+// tokenAuth authenticates a bearer token. kind "" accepts every kind.
+func (s *Server) tokenAuth(kind string, h tokenHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		unauthorized := func(msg string) {
@@ -121,6 +136,14 @@ func (s *Server) apiToken(h tokenHandler) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "Rexus is in lockdown mode: API tokens are disabled")
 			return
 		}
+		if kind != "" && t.Kind != kind {
+			if t.Kind == store.TokenKindDeploy {
+				writeError(w, http.StatusForbidden, "this is a deploy token: it can only call GET /api/v1/env (and /api/v1/health)")
+			} else {
+				writeError(w, http.StatusForbidden, "this is an API token: GET /api/v1/env needs a deploy token (create one on the project's Deploy tokens tab)")
+			}
+			return
+		}
 		ok, remaining, resetIn := s.tokenRate.Allow(t.ID, time.Now())
 		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(tokenRatePerMinute))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
@@ -130,7 +153,9 @@ func (s *Server) apiToken(h tokenHandler) http.HandlerFunc {
 			return
 		}
 		s.store.TouchToken(r.Context(), t.ID, ip)
-		s.noteUse(r, t, ip)
+		if t.Kind != store.TokenKindDeploy { // deploy tokens are audited on every env fetch instead
+			s.noteUse(r, t, ip)
+		}
 		h(w, r, t)
 	}
 }
