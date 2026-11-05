@@ -262,12 +262,19 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        title="Dashboard"
+        title={
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            Dashboard
+            <StatusPill items={items} partial={failed.length > 0} unmonitored={!!allChecks && enabled.length === 0} />
+          </span>
+        }
         subtitle={<LiveStatus updated={updated} refreshing={refreshing} stale={failed.length > 0} />}
         actions={
           <>
             <RangeSwitch value={range} onChange={setRange} />
-            <Button variant="secondary" onClick={() => setTv(true)} aria-label="Open TV mode" title="Full-screen status board for a wall display">TV mode</Button>
+            <Button variant="secondary" onClick={() => setTv(true)} aria-label="Open TV mode" title="TV mode: full-screen status board for a wall display" className="px-2.5">
+              <NavIcon name="tv" size={18} />
+            </Button>
             {projectOptions.length > 1 && (
               <Select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by project" className="w-48!">
                 <option value="">All projects</option>
@@ -441,12 +448,7 @@ function AttentionCard({ items, failed, noChecks }: { items: AttentionItem[]; fa
     if (noChecks) {
       return <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">Nothing is being monitored yet. Add health checks to start watching your projects.</Card>
     }
-    return (
-      <div className="mb-6 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-        <StatusDot status="up" />
-        All systems operational
-      </div>
-    )
+    return null // "All systems operational" is the pill in the page header
   }
   return (
     <div id="needs-attention" className="scroll-mt-4">
@@ -947,5 +949,39 @@ function TvBoard({ projects, byProject, series, unmonitoredCount, items, stale, 
         {unmonitoredCount > 0 && <div className="text-sm text-zinc-600">{unmonitoredCount} project{unmonitoredCount === 1 ? '' : 's'} without health checks not shown</div>}
       </div>
     </div>
+  )
+}
+
+/** The overall verdict, small enough for the page header. Links down to the list when something needs attention. */
+function StatusPill({ items, partial, unmonitored }: { items: AttentionItem[]; partial: boolean; unmonitored: boolean }) {
+  let tone: 'green' | 'red' | 'amber'
+  let text: string
+  if (items.length > 0) {
+    const bad = items.filter((i) => i.tone === 'red').length
+    tone = bad ? 'red' : 'amber'
+    text = bad ? `${bad} ${bad === 1 ? 'issue needs' : 'issues need'} attention` : `${items.length} ${items.length === 1 ? 'warning' : 'warnings'}`
+  } else if (partial || unmonitored) {
+    return null // the cards below explain why there's no verdict
+  } else {
+    tone = 'green'
+    text = 'All systems operational'
+  }
+  const cls = {
+    green: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    red: 'border-red-500/40 bg-red-500/10 text-red-300',
+    amber: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+  }[tone]
+  const dot = { green: 'bg-emerald-400', red: 'bg-red-400', amber: 'bg-amber-400' }[tone]
+  const body = (
+    <>
+      <span className={cx('inline-block h-1.5 w-1.5 rounded-full', dot)} aria-hidden="true" />
+      {text}
+    </>
+  )
+  const base = cx('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium', cls)
+  return items.length > 0 ? (
+    <TileLink to="#needs-attention" className={cx(base, 'hover:brightness-125')}>{body}</TileLink>
+  ) : (
+    <span className={base} role="status">{body}</span>
   )
 }
