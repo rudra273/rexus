@@ -18,6 +18,11 @@ type HealthCheck struct {
 	ProjectID            string     `json:"project_id"`
 	ProjectKey           string     `json:"project_key"`
 	ProjectName          string     `json:"project_name"`
+	ServiceID            *string    `json:"service_id"` // nil = belongs to the project directly
+	ServiceKey           *string    `json:"service_key"`
+	ServiceName          *string    `json:"service_name"`
+	EnvironmentID        *string    `json:"environment_id"` // nil = not tied to an environment
+	EnvironmentName      *string    `json:"environment"`
 	Name                 string     `json:"name"`
 	URL                  string     `json:"url"`
 	Method               string     `json:"method"`
@@ -44,18 +49,22 @@ type HealthCheck struct {
 	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
-const healthSelect = `SELECT c.id, c.project_id, p.key, p.name, c.name, c.url, c.method, c.interval_seconds,
+const healthSelect = `SELECT c.id, c.project_id, p.key, p.name, c.service_id, sv.key, sv.name, c.environment_id, e.name,
+	c.name, c.url, c.method, c.interval_seconds,
 	c.timeout_seconds, c.expected_status, c.max_response_ms, c.ssl_warn_days, c.down_threshold, c.recovery_threshold,
 	c.enabled, c.status, c.consecutive_failures, c.consecutive_successes, c.status_since, c.last_checked_at,
 	c.last_response_ms, c.last_status_code, c.last_error, c.ssl_expires_at, c.next_check_at,
 	(SELECT 100.0 * count(*) FILTER (WHERE r.ok) / NULLIF(count(*), 0)
 	   FROM health_results r WHERE r.check_id = c.id AND r.checked_at > now() - interval '24 hours'),
 	c.created_at, c.updated_at
-	FROM health_checks c JOIN projects p ON p.id = c.project_id`
+	FROM health_checks c JOIN projects p ON p.id = c.project_id
+	LEFT JOIN services sv ON sv.id = c.service_id
+	LEFT JOIN environments e ON e.id = c.environment_id`
 
 func scanHealth(row interface{ Scan(...any) error }) (*HealthCheck, error) {
 	c := &HealthCheck{}
-	err := row.Scan(&c.ID, &c.ProjectID, &c.ProjectKey, &c.ProjectName, &c.Name, &c.URL, &c.Method, &c.IntervalSeconds,
+	err := row.Scan(&c.ID, &c.ProjectID, &c.ProjectKey, &c.ProjectName, &c.ServiceID, &c.ServiceKey, &c.ServiceName,
+		&c.EnvironmentID, &c.EnvironmentName, &c.Name, &c.URL, &c.Method, &c.IntervalSeconds,
 		&c.TimeoutSeconds, &c.ExpectedStatus, &c.MaxResponseMS, &c.SSLWarnDays, &c.DownThreshold, &c.RecoveryThreshold,
 		&c.Enabled, &c.Status, &c.ConsecutiveFailures, &c.ConsecutiveSuccesses, &c.StatusSince, &c.LastCheckedAt,
 		&c.LastResponseMS, &c.LastStatusCode, &c.LastError, &c.SSLExpiresAt, &c.NextCheckAt, &c.Uptime24h,
@@ -67,7 +76,7 @@ func scanHealth(row interface{ Scan(...any) error }) (*HealthCheck, error) {
 }
 
 func (s *Store) listHealth(ctx context.Context, where string, args ...any) ([]*HealthCheck, error) {
-	rows, err := s.Pool.Query(ctx, healthSelect+where+` ORDER BY p.name, c.name`, args...)
+	rows, err := s.Pool.Query(ctx, healthSelect+where+` ORDER BY p.name, sv.name NULLS FIRST, c.name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +100,23 @@ func (s *Store) ListProjectChecks(ctx context.Context, projectID string) ([]*Hea
 	return s.listHealth(ctx, ` WHERE c.project_id = $1`, projectID)
 }
 
+// CheckFilter narrows ListChecks. Zero values mean "no filter".
+type CheckFilter struct {
+	ProjectID   string
+	Service     ScopeFilter
+	Environment ScopeFilter
+}
+
+func (s *Store) ListChecks(ctx context.Context, f CheckFilter) ([]*HealthCheck, error) {
+	var b filterBuilder
+	if f.ProjectID != "" {
+		b.add("c.project_id = ?", f.ProjectID)
+	}
+	b.scope("c.service_id", f.Service)
+	b.scope("c.environment_id", f.Environment)
+	return s.listHealth(ctx, b.sql(), b.args...)
+}
+
 func (s *Store) HealthCheckByID(ctx context.Context, id string) (*HealthCheck, error) {
 	return scanHealth(s.Pool.QueryRow(ctx, healthSelect+` WHERE c.id = $1`, id))
 }
@@ -106,13 +132,13 @@ func (s *Store) CreateHealthCheck(ctx context.Context, c *HealthCheck, createdBy
 	var id string
 	err := s.Pool.QueryRow(ctx, `INSERT INTO health_checks (project_id, name, url, method, interval_seconds,
 			timeout_seconds, expected_status, max_response_ms, ssl_warn_days, down_threshold, recovery_threshold,
-			enabled, next_check_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $12 THEN now() END, $13)
+			enabled, next_check_at, created_by, service_id, environment_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $12 THEN now() END, $13, $14, $15)
 		RETURNING id`,
 		c.ProjectID, c.Name, c.URL, c.Method, c.IntervalSeconds, c.TimeoutSeconds, c.ExpectedStatus, c.MaxResponseMS,
-		c.SSLWarnDays, c.DownThreshold, c.RecoveryThreshold, c.Enabled, createdBy).Scan(&id)
+		c.SSLWarnDays, c.DownThreshold, c.RecoveryThreshold, c.Enabled, createdBy, c.ServiceID, c.EnvironmentID).Scan(&id)
 	if err != nil {
-		return nil, err
+		return nil, writeErr(err)
 	}
 	return s.HealthCheckByID(ctx, id)
 }
@@ -130,12 +156,13 @@ func (s *Store) UpdateHealthCheck(ctx context.Context, c *HealthCheck, resetStat
 			consecutive_successes = CASE WHEN $13 THEN 0 ELSE consecutive_successes END,
 			status_since = CASE WHEN $13 THEN NULL ELSE status_since END,
 			ssl_expires_at = CASE WHEN $13 THEN NULL ELSE ssl_expires_at END,
+			service_id = $14, environment_id = $15,
 			updated_at = now()
 		WHERE id = $1`,
 		c.ID, c.Name, c.URL, c.Method, c.IntervalSeconds, c.TimeoutSeconds, c.ExpectedStatus, c.MaxResponseMS,
-		c.SSLWarnDays, c.DownThreshold, c.RecoveryThreshold, c.Enabled, resetState)
+		c.SSLWarnDays, c.DownThreshold, c.RecoveryThreshold, c.Enabled, resetState, c.ServiceID, c.EnvironmentID)
 	if err != nil {
-		return nil, err
+		return nil, writeErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, ErrNotFound

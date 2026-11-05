@@ -66,6 +66,16 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 
 Whoever can run commands on the server can recover the owner — no secret owner key lives in code or env vars.
 
+## Services (optional)
+
+A project can be split into **services** — e.g. `frontend`, `backend`, `worker` — when it has several parts. Simple projects don't need any: secrets, jobs and health checks can always belong to the project directly.
+
+- Each secret, job and check belongs to the project directly *or* to one service. Environments (`dev`, `staging`, `prod`, …) stay project-wide and are shared by all services; jobs and checks can optionally be tied to one.
+- The same secret name can exist in the project and in each service (e.g. `DATABASE_URL` for both `backend` and `worker`). Nothing is inherited: a service doesn't see the project's own secrets automatically.
+- A service with secrets, jobs or checks can't be deleted — move or delete them first. **Move** on a secret keeps its versions and history.
+- A repository URL and root directory can be noted on a service, for reference only.
+- Services organize; they don't restrict access. Every role still sees the whole project.
+
 ## Health checks and the dashboard
 
 Open a project and click **Add check** to watch a URL. Each check is configured in the UI:
@@ -111,13 +121,18 @@ curl -s -H "Authorization: Bearer $REXUS_TOKEN" $REXUS_URL/api/v1/projects/acme-
 | `GET /api/v1/health` | Checks the token works; shows its name and role |
 | `GET /api/v1/projects` | All projects with their status |
 | `GET /api/v1/projects/{key}/status` | The compact answer: overall status and counts |
-| `GET /api/v1/projects/{key}` | Everything: checks, jobs, secrets expiring in 30 days |
+| `GET /api/v1/projects/{key}` | Everything: services, checks, jobs, secrets expiring in 30 days |
+| `GET /api/v1/projects/{key}/services` | The project's services, each with its own status and counts |
 | `GET /api/v1/projects/{key}/checks` | Health checks: status, response time, 24-hour uptime, SSL expiry |
 | `GET /api/v1/projects/{key}/jobs` | Cron jobs: schedule, last result |
 | `GET /api/v1/projects/{key}/secrets` | Secret names, environment, tags, expiry — never values |
-| `GET /api/v1/projects/{key}/secrets/{env}/{name}` | One secret's metadata |
+| `GET /api/v1/projects/{key}/secrets/{env}/{name}` | One secret of the project itself |
+| `GET /api/v1/projects/{key}/services/{service}/secrets/{env}/{name}` | One secret of a service |
 | `GET /api/v1/secrets/expiring?days=30` | Secrets across all projects that expire soon (or already have) |
 | `POST /api/v1/projects/{key}/secrets/{env}/{name}/reveal` | The secret's value — **contributor tokens only** |
+| `POST /api/v1/projects/{key}/services/{service}/secrets/{env}/{name}/reveal` | A service secret's value — **contributor tokens only** |
+
+`status`, `checks`, `jobs` and `secrets` accept `?service=<key>` and `?environment=<name>`; use `-` for "none" (e.g. `?service=-` = only the project's own resources). Leaving a filter out means "all".
 
 The same reference, with examples, is on the **API** page in Rexus.
 

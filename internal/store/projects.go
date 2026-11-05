@@ -21,6 +21,7 @@ type Project struct {
 	// down > degraded > up; "unknown" until a probe has run; "none" without checks.
 	HealthStatus string `json:"health_status"`
 	CheckCount   int    `json:"check_count"`
+	ServiceCount int    `json:"service_count"`
 }
 
 var projectKeyRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,38}[a-z0-9]$`)
@@ -44,13 +45,14 @@ const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.created_at, 
 			WHEN bool_or(c.status = 'degraded') THEN 'degraded'
 			WHEN bool_or(c.status = 'up') THEN 'up' ELSE 'unknown' END
 		FROM health_checks c WHERE c.project_id = p.id AND c.enabled HAVING count(*) > 0), 'none'),
-	(SELECT count(*) FROM health_checks c WHERE c.project_id = p.id)
+	(SELECT count(*) FROM health_checks c WHERE c.project_id = p.id),
+	(SELECT count(*) FROM services sv WHERE sv.project_id = p.id)
 	FROM projects p`
 
 func scanProject(row interface{ Scan(...any) error }) (*Project, error) {
 	p := &Project{}
 	err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt, &p.JobCount, &p.FailingJobs,
-		&p.HealthStatus, &p.CheckCount)
+		&p.HealthStatus, &p.CheckCount, &p.ServiceCount)
 	if err != nil {
 		return nil, notFound(err)
 	}

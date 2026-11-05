@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, canWrite, type HealthCheck, type HealthEvent, type HealthStatus, type Project, type SeriesBucket, type Uptime } from '../api'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { api, canWrite, type HealthCheck, type HealthEvent, type HealthStatus, type Project, type SeriesBucket, type Service, type ServiceFilter, type Uptime } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
+import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, serviceQuery, useEnvironments, useServices } from './services'
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -54,17 +55,17 @@ function SslBadge({ check }: { check: HealthCheck }) {
 
 // ───────────────────────── project page: list of checks ─────────────────────────
 
-export function ProjectChecks({ project }: { project: Project }) {
+export function ProjectChecks({ project, services, scope }: { project: Project; services: Service[]; scope: ServiceFilter }) {
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
   const [checks, setChecks] = useState<HealthCheck[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(() => {
-    api<{ checks: HealthCheck[] }>(`/api/projects/${encodeURIComponent(project.key)}/checks`)
+    api<{ checks: HealthCheck[] }>(`/api/projects/${encodeURIComponent(project.key)}/checks${serviceQuery(scope, '?')}`)
       .then((r) => setChecks(r.checks))
       .catch((e) => setError(e.message))
-  }, [project.key])
+  }, [project.key, scope])
   useEffect(() => {
     load()
     const t = setInterval(load, 15_000)
@@ -76,7 +77,7 @@ export function ProjectChecks({ project }: { project: Project }) {
       <div className="mb-3 flex items-center justify-between">
         <h2 className="font-medium text-zinc-200">Health checks</h2>
         {writable && (
-          <Link to={`/projects/${project.key}/checks/new`}>
+          <Link to={`/projects/${project.key}/checks/new${scope && scope !== '-' ? `?service=${scope}` : ''}`}>
             <Button variant="secondary">Add check</Button>
           </Link>
         )}
@@ -85,7 +86,7 @@ export function ProjectChecks({ project }: { project: Project }) {
       {!checks ? (
         <Spinner />
       ) : checks.length === 0 ? (
-        <Empty title="No health checks yet">Add a check to watch a URL: status code, response time and SSL expiry.</Empty>
+        <Empty title={scope ? 'No health checks here' : 'No health checks yet'}>Add a check to watch a URL: status code, response time and SSL expiry.</Empty>
       ) : (
         <div className="space-y-2">
           {checks.map((c) => (
@@ -97,6 +98,8 @@ export function ProjectChecks({ project }: { project: Project }) {
                       <StatusDot status={c.enabled ? c.status : 'disabled'} />
                       <span className="truncate font-medium text-zinc-100">{c.name}</span>
                       <HealthBadge status={c.status} paused={!c.enabled} />
+                      {services.length > 0 && !scope && <ServiceBadge r={c} />}
+                      <EnvBadge env={c.environment} />
                     </div>
                     <div className="mt-0.5 max-w-md truncate text-xs text-zinc-500 mono">{c.method} {c.url}</div>
                     {c.enabled && c.status === 'down' && c.last_error && <div className="mt-1 text-xs text-red-300">{c.last_error}</div>}
@@ -283,6 +286,8 @@ export function CheckDetailPage() {
         subtitle={
           <>
             <Link to={`/projects/${c.project_key}`} className="text-zinc-300 hover:underline">{c.project_name}</Link>
+            {c.service_name && <span className="text-zinc-400"> / {c.service_name}</span>}
+            {c.environment && <span className="ml-2"><EnvBadge env={c.environment} /></span>}
             <span className="mx-2 text-zinc-600">·</span>
             <span className="mono">{c.method} {c.url}</span>
           </>
@@ -436,11 +441,16 @@ const INTERVALS: [number, string][] = [
 
 export function CheckFormPage() {
   const { id, key } = useParams()
+  const [params] = useSearchParams()
   const navigate = useNavigate()
   const editing = !!id
 
   const [loaded, setLoaded] = useState(!editing)
   const [projectKey, setProjectKey] = useState(key ?? '')
+  const [serviceId, setServiceId] = useState(params.get('service') ?? '')
+  const [environmentId, setEnvironmentId] = useState('')
+  const { services } = useServices(projectKey)
+  const envs = useEnvironments(projectKey)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [method, setMethod] = useState('GET')
@@ -462,6 +472,8 @@ export function CheckFormPage() {
     api<{ check: HealthCheck }>(`/api/checks/${id}`)
       .then(({ check: c }) => {
         setProjectKey(c.project_key)
+        setServiceId(c.service_id ?? '')
+        setEnvironmentId(c.environment_id ?? '')
         setName(c.name)
         setUrl(c.url)
         setMethod(c.method)
@@ -487,6 +499,8 @@ export function CheckFormPage() {
     setBusy(true)
     setError(null)
     const body = {
+      service_id: serviceId,
+      environment_id: environmentId,
       name,
       url,
       method,
@@ -526,6 +540,17 @@ export function CheckFormPage() {
           <Field label="Name">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Website" required autoFocus />
           </Field>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Service" hint={services && services.length === 0 ? 'This project has no services — the check belongs to the project.' : undefined}>
+              <ServiceSelect services={services ?? []} value={serviceId} onChange={setServiceId} disabled={!services?.length} />
+            </Field>
+            {envs.length > 0 && (
+              <Field label="Environment" hint="Optional — e.g. a staging URL">
+                <EnvironmentSelect envs={envs} value={environmentId} onChange={setEnvironmentId} />
+              </Field>
+            )}
+          </div>
 
           <Field label="URL to check">
             <div className="flex gap-2">

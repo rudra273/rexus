@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, canWrite, type Job, type JobRun, type Project } from '../api'
 import { useAuth } from '../auth'
+import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, useEnvironments, useServices } from './services'
 import {
   Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, cx, fmtTime, timeAgo,
 } from '../ui'
@@ -35,6 +36,8 @@ export function JobTable({ jobs, showProject = true }: { jobs: Job[]; showProjec
                   <StatusDot status={j.enabled ? j.last_status : 'disabled'} />
                   <span className="font-medium text-zinc-100 hover:underline">{j.name}</span>
                   {!j.enabled && <Badge>paused</Badge>}
+                  <ServiceBadge r={j} />
+                  <EnvBadge env={j.environment} />
                 </Link>
                 <div className="ml-4.5 mt-0.5 max-w-xs truncate text-xs text-zinc-500 mono">
                   {j.config.method} {j.config.url}
@@ -42,7 +45,7 @@ export function JobTable({ jobs, showProject = true }: { jobs: Job[]; showProjec
               </td>
               {showProject && (
                 <td className="px-4 py-2.5 text-zinc-400">
-                  {j.project_key ? <Link to={`/projects/${j.project_key}`} className="hover:underline">{j.project_name}</Link> : '—'}
+                  <Link to={`/projects/${j.project_key}`} className="hover:underline">{j.project_name}</Link>
                 </td>
               )}
               <td className="px-4 py-2.5 text-zinc-400 mono">{j.schedule}</td>
@@ -98,6 +101,11 @@ export function JobFormPage() {
   const [loaded, setLoaded] = useState(!editing)
   const [name, setName] = useState('')
   const [projectKey, setProjectKey] = useState(params.get('project') ?? '')
+  const [serviceId, setServiceId] = useState(params.get('service') ?? '')
+  const [environmentId, setEnvironmentId] = useState('')
+  const { meta } = useAuth()
+  const { services } = useServices(projectKey)
+  const envs = useEnvironments(projectKey, !!meta?.modules.vault)
   const [method, setMethod] = useState('GET')
   const [url, setUrl] = useState('')
   const [schedule, setSchedule] = useState('*/15 * * * *')
@@ -117,7 +125,9 @@ export function JobFormPage() {
     api<{ job: Job }>(`/api/jobs/${id}`)
       .then(({ job }) => {
         setName(job.name)
-        setProjectKey(job.project_key ?? '')
+        setProjectKey(job.project_key)
+        setServiceId(job.service_id ?? '')
+        setEnvironmentId(job.environment_id ?? '')
         setMethod(job.config.method)
         setUrl(job.config.url)
         setSchedule(job.schedule)
@@ -149,7 +159,9 @@ export function JobFormPage() {
     setError(null)
     const payload = {
       name,
-      project_key: projectKey || null,
+      project_key: projectKey,
+      service_id: serviceId,
+      environment_id: environmentId,
       method,
       url,
       schedule,
@@ -183,15 +195,37 @@ export function JobFormPage() {
             <Field label="Name">
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Supabase keepalive" required autoFocus />
             </Field>
-            <Field label="Project">
-              <Select value={projectKey} onChange={(e) => setProjectKey(e.target.value)}>
-                <option value="">— No project —</option>
+            <Field label="Project" hint={editing ? 'A job stays in its project.' : undefined}>
+              <Select
+                value={projectKey}
+                onChange={(e) => {
+                  setProjectKey(e.target.value)
+                  setServiceId('')
+                  setEnvironmentId('')
+                }}
+                disabled={editing}
+                required
+              >
+                <option value="" disabled>Choose a project…</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
                 ))}
               </Select>
             </Field>
           </div>
+
+          {projectKey && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Service" hint={services && services.length === 0 ? 'This project has no services — the job belongs to the project.' : undefined}>
+                <ServiceSelect services={services ?? []} value={serviceId} onChange={setServiceId} disabled={!services?.length} />
+              </Field>
+              {envs.length > 0 && (
+                <Field label="Environment" hint="Optional — e.g. a job that only pings staging">
+                  <EnvironmentSelect envs={envs} value={environmentId} onChange={setEnvironmentId} />
+                </Field>
+              )}
+            </div>
+          )}
 
           <Field label="Request">
             <div className="flex gap-2">
@@ -362,7 +396,7 @@ export function JobDetailPage() {
     if (!confirm(`Delete job "${job.name}" and its run history?`)) return
     try {
       await api(`/api/jobs/${job.id}`, { method: 'DELETE' })
-      navigate(job.project_key ? `/projects/${job.project_key}` : '/jobs')
+      navigate(`/projects/${job.project_key}`)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -382,11 +416,11 @@ export function JobDetailPage() {
           </span>
         }
         subtitle={
-          job.project_key ? (
-            <>Project: <Link to={`/projects/${job.project_key}`} className="text-zinc-300 hover:underline">{job.project_name}</Link></>
-          ) : (
-            'No project'
-          )
+          <>
+            Project: <Link to={`/projects/${job.project_key}`} className="text-zinc-300 hover:underline">{job.project_name}</Link>
+            {job.service_name && <span className="text-zinc-400"> / {job.service_name}</span>}
+            {job.environment && <span className="ml-2"><EnvBadge env={job.environment} /></span>}
+          </>
         }
         actions={
           writable && (

@@ -16,7 +16,9 @@ import (
 )
 
 type jobInput struct {
-	ProjectKey     *string           `json:"project_key"`
+	ProjectKey     *string           `json:"project_key"`    // required on create; can't change afterwards
+	ServiceID      *string           `json:"service_id"`     // "" = the project directly; omitted on update = unchanged
+	EnvironmentID  *string           `json:"environment_id"` // "" = no environment; omitted on update = unchanged
 	Name           string            `json:"name"`
 	Schedule       string            `json:"schedule"`
 	URL            string            `json:"url"`
@@ -69,17 +71,37 @@ func (s *Server) buildJob(r *http.Request, in *jobInput, j *store.Job) error {
 	}
 	j.Name = name
 
-	j.ProjectID = nil
-	if in.ProjectKey != nil && strings.TrimSpace(*in.ProjectKey) != "" {
-		p, err := s.store.ProjectByKey(r.Context(), strings.TrimSpace(*in.ProjectKey))
+	// Every job belongs to a project. It is chosen on create and stays put:
+	// moving a job to another project is not supported.
+	key := ""
+	if in.ProjectKey != nil {
+		key = strings.ToLower(strings.TrimSpace(*in.ProjectKey))
+	}
+	switch {
+	case j.ID == "" && key == "":
+		return errors.New("choose a project for this job")
+	case j.ID == "":
+		p, err := s.store.ProjectByKey(r.Context(), key)
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("project %q not found", *in.ProjectKey)
+			return fmt.Errorf("project %q not found", key)
 		}
 		if err != nil {
 			return err
 		}
-		j.ProjectID = &p.ID
+		j.ProjectID, j.ProjectKey = p.ID, p.Key
+	case key != "" && key != j.ProjectKey:
+		return errors.New("a job can't be moved to another project — create a new job there instead")
 	}
+	// On update, omitted scope fields keep their value; "" clears them.
+	svcIn, envIn := in.ServiceID, in.EnvironmentID
+	if j.ID != "" {
+		svcIn, envIn = keepIfOmitted(svcIn, j.ServiceID), keepIfOmitted(envIn, j.EnvironmentID)
+	}
+	svc, env, err := s.resolveScope(r, j.ProjectID, svcIn, envIn)
+	if err != nil {
+		return err
+	}
+	j.ServiceID, j.EnvironmentID = idOrNil(svc), envIDOrNil(env)
 
 	sched := strings.TrimSpace(in.Schedule)
 	if err := scheduler.Validate(sched); err != nil {
@@ -184,7 +206,14 @@ func (s *Server) loadJob(w http.ResponseWriter, r *http.Request) (*store.Job, bo
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	var projectID *string
+	var f store.JobFilter
+	var ok bool
+	if f.Service, ok = scopeFilterParam(w, r, "service"); !ok {
+		return
+	}
+	if f.Environment, ok = scopeFilterParam(w, r, "environment"); !ok {
+		return
+	}
 	if key := r.URL.Query().Get("project"); key != "" {
 		p, err := s.store.ProjectByKey(r.Context(), key)
 		if errors.Is(err, store.ErrNotFound) {
@@ -195,9 +224,9 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, a *authC
 			s.internalError(w, r, err)
 			return
 		}
-		projectID = &p.ID
+		f.ProjectID = p.ID
 	}
-	jobs, err := s.store.ListJobs(r.Context(), projectID)
+	jobs, err := s.store.ListJobs(r.Context(), f)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -233,11 +262,16 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request, a *auth
 		return
 	}
 	created, err := s.store.CreateJob(r.Context(), j, a.user.ID)
+	if errors.Is(err, store.ErrInvalidScope) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "job.create", "job", created.ID, map[string]any{"name": created.Name, "url": created.Config.URL})
+	s.audit(r, a, "job.create", "job", created.ID, scopeDetails(map[string]any{"name": created.Name, "url": created.Config.URL,
+		"project": created.ProjectKey}, created.ServiceKey, created.EnvironmentName))
 	v, err := s.view(created, a)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -258,16 +292,27 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request, a *auth
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	before := *j
 	if err := s.buildJob(r, &in, j); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	updated, err := s.store.UpdateJob(r.Context(), j)
+	if errors.Is(err, store.ErrInvalidScope) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "job.update", "job", updated.ID, map[string]any{"name": updated.Name, "enabled": updated.Enabled})
+	s.audit(r, a, "job.update", "job", updated.ID, scopeDetails(map[string]any{"name": updated.Name, "enabled": updated.Enabled,
+		"project": updated.ProjectKey}, updated.ServiceKey, updated.EnvironmentName))
+	if !sameID(before.ServiceID, updated.ServiceID) || !sameID(before.EnvironmentID, updated.EnvironmentID) {
+		s.audit(r, a, "job.move", "job", updated.ID, map[string]any{"name": updated.Name, "project": updated.ProjectKey,
+			"from_service": strOr(before.ServiceKey, ""), "service": strOr(updated.ServiceKey, ""),
+			"from_environment": strOr(before.EnvironmentName, ""), "environment": strOr(updated.EnvironmentName, "")})
+	}
 	v, err := s.view(updated, a)
 	if err != nil {
 		s.internalError(w, r, err)

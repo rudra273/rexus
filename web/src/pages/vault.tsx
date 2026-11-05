@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api, canWrite, type Environment, type Project, type Secret, type SecretVersion } from '../api'
+import { api, canWrite, type Environment, type Project, type Secret, type SecretVersion, type Service, type ServiceFilter } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
+import { ServiceBadge, ServiceSelect, serviceQuery } from './services'
 
 export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'days_left'> }) {
   if (!secret.expires_on || secret.days_left == null) return <span className="text-xs text-zinc-600">no expiry</span>
@@ -15,7 +16,7 @@ export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'd
 
 // ───────────────────────── project page: secrets by environment ─────────────────────────
 
-export function ProjectVault({ project }: { project: Project }) {
+export function ProjectVault({ project, services, scope, onChanged }: { project: Project; services: Service[]; scope: ServiceFilter; onChanged: () => void }) {
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
   const [envs, setEnvs] = useState<Environment[] | null>(null)
@@ -45,12 +46,12 @@ export function ProjectVault({ project }: { project: Project }) {
   const loadSecrets = useCallback(async () => {
     if (!envId) return setSecrets([])
     try {
-      const r = await api<{ secrets: Secret[] }>(`/api/secrets?environment=${envId}`)
+      const r = await api<{ secrets: Secret[] }>(`/api/secrets?environment=${envId}${serviceQuery(scope)}`)
       setSecrets(r.secrets)
     } catch (e) {
       setError((e as Error).message)
     }
-  }, [envId])
+  }, [envId, scope])
   useEffect(() => {
     setSecrets(null)
     loadSecrets()
@@ -59,6 +60,7 @@ export function ProjectVault({ project }: { project: Project }) {
   const refresh = () => {
     loadSecrets()
     loadEnvs()
+    onChanged() // service secret counts
   }
   const active = envs?.find((e) => e.id === envId)
 
@@ -149,13 +151,13 @@ export function ProjectVault({ project }: { project: Project }) {
           {!secrets ? (
             <Spinner />
           ) : secrets.length === 0 ? (
-            <Empty title={`No secrets in ${active?.name ?? 'this environment'}`}>
+            <Empty title={`No secrets ${scope ? 'here ' : ''}in ${active?.name ?? 'this environment'}`}>
               {writable ? 'Add API keys and credentials. Values are encrypted before they reach the database.' : 'Nothing has been stored here yet.'}
             </Empty>
           ) : (
             <div className="space-y-2">
               {secrets.map((s) => (
-                <SecretRow key={s.id} secret={s} writable={writable} onEdit={() => setForm({ existing: s })} onChanged={refresh} />
+                <SecretRow key={s.id} secret={s} services={services} showService={!scope} writable={writable} onEdit={() => setForm({ existing: s })} onChanged={refresh} />
               ))}
             </div>
           )}
@@ -165,6 +167,8 @@ export function ProjectVault({ project }: { project: Project }) {
       {form && envId && (
         <SecretForm
           environmentId={envId}
+          services={services}
+          defaultService={scope && scope !== '-' ? scope : ''}
           existing={form.existing}
           onClose={() => setForm(null)}
           onSaved={() => {
@@ -177,7 +181,8 @@ export function ProjectVault({ project }: { project: Project }) {
   )
 }
 
-function SecretRow({ secret, writable, onEdit, onChanged }: { secret: Secret; writable: boolean; onEdit: () => void; onChanged: () => void }) {
+function SecretRow({ secret, services, showService, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
+  const [moving, setMoving] = useState(false)
   const [value, setValue] = useState<{ text: string; label: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -272,6 +277,7 @@ function SecretRow({ secret, writable, onEdit, onChanged }: { secret: Secret; wr
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-zinc-100 mono">{secret.name}</span>
+            {showService && <ServiceBadge r={secret} />}
             <Badge>v{secret.current_version}</Badge>
             <ExpiryBadge secret={secret} />
             {secret.tags.map((t) => (
@@ -286,6 +292,7 @@ function SecretRow({ secret, writable, onEdit, onChanged }: { secret: Secret; wr
             <button className={link} onClick={copy}>Copy</button>
             <button className={link} onClick={toggleHistory}>{showHistory ? 'Hide history' : 'History'}</button>
             <button className={link} onClick={onEdit}>Edit</button>
+            {(services.length > 0 || secret.service_id) && <button className={link} onClick={() => setMoving(true)}>Move</button>}
             <button className={cx(link, 'hover:!text-red-400')} onClick={remove}>Delete</button>
           </div>
         )}
@@ -338,11 +345,61 @@ function SecretRow({ secret, writable, onEdit, onChanged }: { secret: Secret; wr
           )}
         </div>
       )}
+      {moving && (
+        <MoveSecret
+          secret={secret}
+          services={services}
+          onClose={() => setMoving(false)}
+          onMoved={() => {
+            setMoving(false)
+            onChanged()
+          }}
+        />
+      )}
     </Card>
   )
 }
 
-function SecretForm({ environmentId, existing, onClose, onSaved }: { environmentId: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
+/** Moves a secret between the project itself and its services. Versions and history stay with it. */
+function MoveSecret({ secret, services, onClose, onMoved }: { secret: Secret; services: Service[]; onClose: () => void; onMoved: () => void }) {
+  const [to, setTo] = useState(secret.service_id ?? '')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`/api/secrets/${secret.id}/move`, { method: 'POST', body: { service_id: to } })
+      onMoved()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title={`Move ${secret.name}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-sm text-zinc-400">
+          Stays in <b>{secret.environment}</b>. Its value, all {secret.current_version} version(s) and history move with it. API paths change:
+          a project secret is read at <code>/secrets/…</code>, a service secret at <code>/services/&lt;key&gt;/secrets/…</code>.
+        </p>
+        <Field label="Move to">
+          <ServiceSelect services={services} value={to} onChange={setTo} />
+        </Field>
+        <ErrorBox error={error} />
+        <div className="flex gap-2">
+          <Button type="submit" disabled={busy || to === (secret.service_id ?? '')}>{busy ? 'Moving…' : 'Move secret'}</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function SecretForm({ environmentId, services, defaultService, existing, onClose, onSaved }: { environmentId: string; services: Service[]; defaultService: string; existing?: Secret; onClose: () => void; onSaved: () => void }) {
+  const [serviceId, setServiceId] = useState(existing?.service_id ?? defaultService)
   const [name, setName] = useState(existing?.name ?? '')
   const [value, setValue] = useState('')
   const [showValue, setShowValue] = useState(false)
@@ -365,6 +422,7 @@ function SecretForm({ environmentId, existing, onClose, onSaved }: { environment
       custom_fields: Object.fromEntries(fields.filter((f) => f.name.trim()).map((f) => [f.name.trim(), f.value])),
     }
     if (value) body.value = value
+    if (!existing) body.service_id = serviceId
     try {
       if (existing) await api(`/api/secrets/${existing.id}`, { method: 'PATCH', body })
       else await api(`/api/environments/${environmentId}/secrets`, { method: 'POST', body })
@@ -384,6 +442,11 @@ function SecretForm({ environmentId, existing, onClose, onSaved }: { environment
         <Field label="Name" hint="Letters, numbers, dots, dashes and underscores — e.g. STRIPE_SECRET_KEY">
           <Input value={name} onChange={(e) => setName(e.target.value)} className="mono" autoFocus required />
         </Field>
+        {services.length > 0 && (
+          <Field label="Service" hint={existing ? 'Use “Move” to change where this secret belongs.' : 'Secrets of the project itself are not shared with services automatically.'}>
+            <ServiceSelect services={services} value={serviceId} onChange={setServiceId} disabled={!!existing} />
+          </Field>
+        )}
         <Field
           label={existing ? 'New value' : 'Value'}
           hint={existing ? `Leave blank to keep the current value (v${existing.current_version}). A new value is saved as v${existing.current_version + 1}.` : 'Encrypted before it is stored.'}
@@ -480,7 +543,7 @@ export function VaultPage() {
     <>
       <PageHeader title="Vault" subtitle="Search secrets across all projects. Open a project to reveal, edit or restore a value." />
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or project…" />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, project or service…" />
         <div>
           <Input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Filter by tag" list="vault-tags" />
           <datalist id="vault-tags">{allTags.map((t) => <option key={t} value={t} />)}</datalist>
@@ -513,7 +576,10 @@ export function VaultPage() {
               {secrets.map((s) => (
                 <tr key={s.id} className="hover:bg-zinc-800/30">
                   <td className="px-4 py-2.5 text-zinc-100 mono">{s.name}</td>
-                  <td className="px-4 py-2.5"><Link to={`/projects/${s.project_key}`} className="text-zinc-300 hover:underline">{s.project_name}</Link></td>
+                  <td className="px-4 py-2.5">
+                    <Link to={`/projects/${s.project_key}`} className="text-zinc-300 hover:underline">{s.project_name}</Link>
+                    {s.service_key && <span className="ml-1.5"><ServiceBadge r={s} /></span>}
+                  </td>
                   <td className="px-4 py-2.5"><Badge>{s.environment}</Badge></td>
                   <td className="px-4 py-2.5"><span className="flex flex-wrap gap-1">{s.tags.map((t) => <Badge key={t} tone="sky">{t}</Badge>)}</span></td>
                   <td className="px-4 py-2.5"><ExpiryBadge secret={s} /></td>

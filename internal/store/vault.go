@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -93,9 +92,15 @@ func (s *Store) RenameEnvironment(ctx context.Context, id, name string) error {
 	return nil
 }
 
+// DeleteEnvironment removes an environment. Its secrets go with it (the
+// handler only allows deleting an empty one); jobs and checks scoped to it
+// block the delete with ErrInUse.
 func (s *Store) DeleteEnvironment(ctx context.Context, id string) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM environments WHERE id = $1`, id)
 	if err != nil {
+		if isFKViolation(err) {
+			return ErrInUse
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {
@@ -110,8 +115,12 @@ type Secret struct {
 	ID              string            `json:"id"`
 	EnvironmentID   string            `json:"environment_id"`
 	EnvironmentName string            `json:"environment"`
+	ProjectID       string            `json:"project_id"`
 	ProjectKey      string            `json:"project_key"`
 	ProjectName     string            `json:"project_name"`
+	ServiceID       *string           `json:"service_id"` // nil = belongs to the project directly
+	ServiceKey      *string           `json:"service_key"`
+	ServiceName     *string           `json:"service_name"`
 	Name            string            `json:"name"`
 	ExpiresOn       *string           `json:"expires_on"` // YYYY-MM-DD
 	DaysLeft        *int              `json:"days_left"`  // negative = already expired
@@ -124,17 +133,19 @@ type Secret struct {
 	UpdatedBy       *string           `json:"updated_by"`
 }
 
-const secretSelect = `SELECT s.id, s.environment_id, e.name, p.key, p.name, s.name,
+const secretSelect = `SELECT s.id, s.environment_id, e.name, s.project_id, p.key, p.name, s.service_id, sv.key, sv.name, s.name,
 	to_char(s.expires_on, 'YYYY-MM-DD'), (s.expires_on - current_date), s.notes, s.tags, s.custom_fields,
 	s.current_version, s.created_at, s.updated_at, u.email
 	FROM secrets s
 	JOIN environments e ON e.id = s.environment_id
-	JOIN projects p ON p.id = e.project_id
+	JOIN projects p ON p.id = s.project_id
+	LEFT JOIN services sv ON sv.id = s.service_id
 	LEFT JOIN users u ON u.id = s.updated_by`
 
 func scanSecret(row interface{ Scan(...any) error }) (*Secret, error) {
 	x := &Secret{}
-	err := row.Scan(&x.ID, &x.EnvironmentID, &x.EnvironmentName, &x.ProjectKey, &x.ProjectName, &x.Name,
+	err := row.Scan(&x.ID, &x.EnvironmentID, &x.EnvironmentName, &x.ProjectID, &x.ProjectKey, &x.ProjectName,
+		&x.ServiceID, &x.ServiceKey, &x.ServiceName, &x.Name,
 		&x.ExpiresOn, &x.DaysLeft, &x.Notes, &x.Tags, &x.CustomFields, &x.CurrentVersion,
 		&x.CreatedAt, &x.UpdatedAt, &x.UpdatedBy)
 	if err != nil {
@@ -153,40 +164,33 @@ func scanSecret(row interface{ Scan(...any) error }) (*Secret, error) {
 type SecretFilter struct {
 	EnvironmentID string
 	ProjectID     string
-	Query         string // matches secret name, project key or project name
+	Service       ScopeFilter // "" = all, "-" = project directly, or a service ID
+	Query         string      // matches secret name, project key/name or service key
 	Tag           string
 	ExpiringDays  *int // expires within N days (already-expired secrets included)
 }
 
 func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, error) {
-	var where []string
-	var args []any
-	add := func(cond string, v any) {
-		args = append(args, v)
-		where = append(where, strings.ReplaceAll(cond, "?", fmt.Sprintf("$%d", len(args))))
-	}
+	var b filterBuilder
 	if f.EnvironmentID != "" {
-		add("s.environment_id = ?", f.EnvironmentID)
+		b.add("s.environment_id = ?", f.EnvironmentID)
 	}
 	if f.ProjectID != "" {
-		add("p.id = ?", f.ProjectID)
+		b.add("s.project_id = ?", f.ProjectID)
 	}
+	b.scope("s.service_id", f.Service)
 	if q := strings.TrimSpace(f.Query); q != "" {
-		add("(s.name ILIKE '%' || ? || '%' OR p.key ILIKE '%' || ? || '%' OR p.name ILIKE '%' || ? || '%')", q)
+		b.add("(s.name ILIKE '%' || ? || '%' OR p.key ILIKE '%' || ? || '%' OR p.name ILIKE '%' || ? || '%' OR sv.key ILIKE '%' || ? || '%')", q)
 	}
 	if f.Tag != "" {
-		add("? = ANY (s.tags)", strings.ToLower(f.Tag))
+		b.add("? = ANY (s.tags)", strings.ToLower(f.Tag))
 	}
 	if f.ExpiringDays != nil {
-		add("s.expires_on IS NOT NULL AND s.expires_on <= current_date + (?)::int", *f.ExpiringDays)
+		b.add("s.expires_on IS NOT NULL AND s.expires_on <= current_date + (?)::int", *f.ExpiringDays)
 	}
-	q := secretSelect
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
-	q += ` ORDER BY p.name, e.position, s.name LIMIT 500`
+	q := secretSelect + b.sql() + ` ORDER BY p.name, e.position, sv.position NULLS FIRST, sv.name NULLS FIRST, s.name LIMIT 500`
 
-	rows, err := s.Pool.Query(ctx, q, args...)
+	rows, err := s.Pool.Query(ctx, q, b.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,14 +210,21 @@ func (s *Store) SecretByID(ctx context.Context, id string) (*Secret, error) {
 	return scanSecret(s.Pool.QueryRow(ctx, secretSelect+` WHERE s.id = $1`, id))
 }
 
-// SecretByName finds a secret by project key, environment name and secret name.
-func (s *Store) SecretByName(ctx context.Context, projectKey, env, name string) (*Secret, error) {
-	return scanSecret(s.Pool.QueryRow(ctx, secretSelect+` WHERE p.key = $1 AND e.name = $2 AND s.name = $3`,
-		strings.ToLower(projectKey), strings.ToLower(env), name))
+// SecretByName finds one secret by project key, environment name and secret
+// name, in exactly one scope: serviceKey "" means a secret of the project
+// itself; otherwise a secret of that service. It never searches across scopes.
+func (s *Store) SecretByName(ctx context.Context, projectKey, serviceKey, env, name string) (*Secret, error) {
+	q := secretSelect + ` WHERE p.key = $1 AND e.name = $2 AND s.name = $3 AND s.service_id IS NULL`
+	args := []any{strings.ToLower(projectKey), strings.ToLower(env), name}
+	if serviceKey != "" {
+		q = secretSelect + ` WHERE p.key = $1 AND e.name = $2 AND s.name = $3 AND sv.key = $4`
+		args = append(args, strings.ToLower(serviceKey))
+	}
+	return scanSecret(s.Pool.QueryRow(ctx, q, args...))
 }
 
 // CreateSecret inserts a secret and its first version. sec.ID must be set
-// (it is part of the encryption context).
+// (it is part of the encryption context), as must ProjectID and EnvironmentID.
 func (s *Store) CreateSecret(ctx context.Context, sec *Secret, ciphertext, wrappedKey []byte, userID string) (*Secret, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -221,15 +232,13 @@ func (s *Store) CreateSecret(ctx context.Context, sec *Secret, ciphertext, wrapp
 	}
 	defer tx.Rollback(ctx)
 
-	_, err = tx.Exec(ctx, `INSERT INTO secrets (id, environment_id, name, expires_on, notes, tags, custom_fields,
-			current_version, created_by, updated_by)
-		VALUES ($1, $2, $3, $4::text::date, $5, $6, $7, 1, $8, $8)`,
-		sec.ID, sec.EnvironmentID, sec.Name, sec.ExpiresOn, sec.Notes, sec.Tags, sec.CustomFields, userID)
+	_, err = tx.Exec(ctx, `INSERT INTO secrets (id, project_id, environment_id, service_id, name, expires_on, notes,
+			tags, custom_fields, current_version, created_by, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6::text::date, $7, $8, $9, 1, $10, $10)`,
+		sec.ID, sec.ProjectID, sec.EnvironmentID, sec.ServiceID, sec.Name, sec.ExpiresOn, sec.Notes, sec.Tags,
+		sec.CustomFields, userID)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, ErrConflict
-		}
-		return nil, err
+		return nil, writeErr(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO secret_versions (secret_id, version, ciphertext, wrapped_key, created_by)
 		VALUES ($1, 1, $2, $3, $4)`, sec.ID, ciphertext, wrappedKey, userID); err != nil {
@@ -288,6 +297,23 @@ func (s *Store) UpdateSecret(ctx context.Context, sec *Secret, nv *NewVersion, u
 		return nil, err
 	}
 	return s.SecretByID(ctx, sec.ID)
+}
+
+// MoveSecret moves a secret to another scope of the same project: serviceID
+// nil = the project directly. The ID, versions and ciphertexts stay as they
+// are (the encryption context is only ID + version). ErrConflict when the
+// destination already has a secret with this name in the same environment;
+// ErrInvalidScope when the service belongs to another project.
+func (s *Store) MoveSecret(ctx context.Context, id string, serviceID *string, userID string) (*Secret, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE secrets SET service_id = $2, updated_by = $3, updated_at = now() WHERE id = $1`,
+		id, serviceID, userID)
+	if err != nil {
+		return nil, writeErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return s.SecretByID(ctx, id)
 }
 
 func (s *Store) DeleteSecret(ctx context.Context, id string) error {

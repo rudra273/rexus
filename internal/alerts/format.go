@@ -16,6 +16,7 @@ type Message struct {
 	Lines      []string
 	Link       string
 	ProjectKey string
+	ServiceKey string // set when the source resource belongs to a service
 	DedupeKey  string // set for reminders: each goes to each channel once
 }
 

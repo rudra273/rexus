@@ -177,6 +177,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/projects/{key}/secrets", s.apiToken(s.handleV1ProjectSecrets))
 	mux.HandleFunc("GET /api/v1/projects/{key}/secrets/{env}/{name}", s.apiToken(s.handleV1Secret))
 	mux.HandleFunc("POST /api/v1/projects/{key}/secrets/{env}/{name}/reveal", s.apiToken(s.handleV1Reveal))
+	mux.HandleFunc("GET /api/v1/projects/{key}/services", s.apiToken(s.handleV1Services))
+	mux.HandleFunc("GET /api/v1/projects/{key}/services/{service}/secrets/{env}/{name}", s.apiToken(s.handleV1Secret))
+	mux.HandleFunc("POST /api/v1/projects/{key}/services/{service}/secrets/{env}/{name}/reveal", s.apiToken(s.handleV1Reveal))
 	mux.HandleFunc("GET /api/v1/secrets/expiring", s.apiToken(s.handleV1Expiring))
 
 	// Alerts (owner / admin)
@@ -194,6 +197,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{key}", s.authed(s.handleGetProject))
 	mux.HandleFunc("PATCH /api/projects/{key}", s.authed(s.handleUpdateProject))
 	mux.HandleFunc("DELETE /api/projects/{key}", s.authed(s.handleDeleteProject))
+
+	// Services: optional groups inside a project (shared by every module)
+	mux.HandleFunc("GET /api/projects/{key}/services", s.authed(s.handleListServices))
+	mux.HandleFunc("POST /api/projects/{key}/services", s.authed(s.handleCreateService))
+	mux.HandleFunc("PATCH /api/services/{id}", s.authed(s.handleUpdateService))
+	mux.HandleFunc("DELETE /api/services/{id}", s.authed(s.handleDeleteService))
 
 	// Health checks (system jobs: always on, regardless of the scheduler module)
 	mux.HandleFunc("GET /api/checks", s.authed(s.handleListChecks))
@@ -230,6 +239,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /api/secrets/{id}/reveal", s.authed(s.handleRevealSecret))
 		mux.HandleFunc("GET /api/secrets/{id}/versions", s.authed(s.handleListVersions))
 		mux.HandleFunc("POST /api/secrets/{id}/restore", s.authed(s.handleRestoreSecret))
+		mux.HandleFunc("POST /api/secrets/{id}/move", s.authed(s.handleMoveSecret))
 	}
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

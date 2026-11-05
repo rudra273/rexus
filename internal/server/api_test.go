@@ -156,3 +156,26 @@ func TestCheckAndJobViewsLeakNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateStatus(t *testing.T) {
+	c := func(status string, enabled bool) *store.HealthCheck {
+		return &store.HealthCheck{Status: status, Enabled: enabled}
+	}
+	cases := []struct {
+		checks []*store.HealthCheck
+		want   string
+	}{
+		{nil, "none"},
+		{[]*store.HealthCheck{c("down", false)}, "none"}, // paused checks don't count
+		{[]*store.HealthCheck{c("unknown", true)}, "unknown"},
+		{[]*store.HealthCheck{c("unknown", true), c("up", true)}, "up"},
+		{[]*store.HealthCheck{c("up", true), c("degraded", true)}, "degraded"},
+		{[]*store.HealthCheck{c("degraded", true), c("down", true), c("up", true)}, "down"},
+		{[]*store.HealthCheck{c("up", true), c("down", false)}, "up"},
+	}
+	for i, tc := range cases {
+		if got := aggregateStatus(tc.checks); got != tc.want {
+			t.Errorf("case %d: got %q, want %q", i, got, tc.want)
+		}
+	}
+}

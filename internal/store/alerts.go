@@ -130,6 +130,7 @@ type AlertRecord struct {
 	ChannelID   *string   `json:"channel_id"`
 	ChannelName string    `json:"channel_name"`
 	ProjectKey  *string   `json:"project_key"`
+	ServiceKey  *string   `json:"service_key"`
 	Title       string    `json:"title"`
 	Status      string    `json:"status"` // sent | failed
 	Error       *string   `json:"error"`
@@ -137,14 +138,15 @@ type AlertRecord struct {
 }
 
 func (s *Store) RecordAlert(ctx context.Context, r *AlertRecord) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO alerts_sent (event, channel_id, channel_name, project_key, title, status, error, dedupe_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		r.Event, r.ChannelID, r.ChannelName, r.ProjectKey, r.Title, r.Status, r.Error, r.DedupeKey)
+	_, err := s.Pool.Exec(ctx, `INSERT INTO alerts_sent (event, channel_id, channel_name, project_key, service_key, title,
+			status, error, dedupe_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		r.Event, r.ChannelID, r.ChannelName, r.ProjectKey, r.ServiceKey, r.Title, r.Status, r.Error, r.DedupeKey)
 	return err
 }
 
 func (s *Store) ListAlertRecords(ctx context.Context, limit int) ([]*AlertRecord, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id, at, event, channel_id, channel_name, project_key, title, status, error
+	rows, err := s.Pool.Query(ctx, `SELECT id, at, event, channel_id, channel_name, project_key, service_key, title, status, error
 		FROM alerts_sent ORDER BY id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -153,7 +155,7 @@ func (s *Store) ListAlertRecords(ctx context.Context, limit int) ([]*AlertRecord
 	out := []*AlertRecord{}
 	for rows.Next() {
 		r := &AlertRecord{}
-		if err := rows.Scan(&r.ID, &r.At, &r.Event, &r.ChannelID, &r.ChannelName, &r.ProjectKey, &r.Title, &r.Status, &r.Error); err != nil {
+		if err := rows.Scan(&r.ID, &r.At, &r.Event, &r.ChannelID, &r.ChannelName, &r.ProjectKey, &r.ServiceKey, &r.Title, &r.Status, &r.Error); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

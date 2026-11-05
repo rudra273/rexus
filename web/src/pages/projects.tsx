@@ -6,6 +6,7 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner
 import { JobTable } from './jobs'
 import { degradedReason, ProjectChecks } from './health'
 import { ExpiryBadge, ProjectVault } from './vault'
+import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -27,6 +28,11 @@ interface AttentionItem {
   sub: string
   to: string
   right?: ReactNode
+}
+
+/** "Project" or "Project / service" for attention items. */
+function scopeName(r: { project_name: string; service_key: string | null }) {
+  return r.service_key ? `${r.project_name} / ${r.service_key}` : r.project_name
 }
 
 const SEVERITY: Record<string, number> = { down: 0, degraded: 1, unknown: 2, up: 3, none: 4 }
@@ -75,19 +81,19 @@ export function DashboardPage() {
   const items: AttentionItem[] = [
     ...down.map((c): AttentionItem => ({
       id: `d${c.id}`, tone: 'red', label: 'Down', title: c.name, to: `/checks/${c.id}`,
-      sub: `${c.project_name}${c.last_error ? ` · ${c.last_error}` : ''}${c.status_since ? ` · since ${timeAgo(c.status_since)}` : ''}`,
+      sub: `${scopeName(c)}${c.last_error ? ` · ${c.last_error}` : ''}${c.status_since ? ` · since ${timeAgo(c.status_since)}` : ''}`,
     })),
     ...degraded.map((c): AttentionItem => ({
       id: `g${c.id}`, tone: 'amber', label: 'Degraded', title: c.name, to: `/checks/${c.id}`,
-      sub: `${c.project_name} · ${degradedReason(c)}`,
+      sub: `${scopeName(c)} · ${degradedReason(c)}`,
     })),
     ...failingJobs.map((j): AttentionItem => ({
       id: `j${j.id}`, tone: 'red', label: 'Job failed', title: j.name, to: `/jobs/${j.id}`,
-      sub: `${j.project_name ?? 'No project'}${j.last_run_at ? ` · last run ${timeAgo(j.last_run_at)}` : ''}`,
+      sub: `${scopeName(j)}${j.last_run_at ? ` · last run ${timeAgo(j.last_run_at)}` : ''}`,
     })),
     ...expiring.map((s): AttentionItem => ({
       id: `s${s.id}`, tone: (s.days_left ?? 0) <= 7 ? 'red' : 'amber', label: 'Key expiring', title: s.name,
-      to: `/projects/${s.project_key}`, sub: `${s.project_name} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
+      to: `/projects/${s.project_key}`, sub: `${scopeName(s)} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
     })),
   ]
 
@@ -251,27 +257,35 @@ export function ProjectDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  // '' = all services, '-' = the project directly, otherwise a service ID.
+  const [scope, setScope] = useState('')
   const writable = !!user && canWrite(user.role)
+  const { services, reload: reloadServices } = useServices(key)
 
   const load = useCallback(async () => {
     try {
       const r = await api<{ project: Project }>(`/api/projects/${encodeURIComponent(key)}`)
       setProject(r.project)
       if (meta?.modules.scheduler) {
-        const j = await api<{ jobs: Job[] }>(`/api/jobs?project=${encodeURIComponent(key)}`)
+        const j = await api<{ jobs: Job[] }>(`/api/jobs?project=${encodeURIComponent(key)}${serviceQuery(scope)}`)
         setJobs(j.jobs)
       }
     } catch (e) {
       setError((e as Error).message)
     }
-  }, [key, meta])
+  }, [key, meta, scope])
+
+  // A deleted (or renamed-away) service can't stay selected.
+  useEffect(() => {
+    if (services && scope && scope !== '-' && !services.some((s) => s.id === scope)) setScope('')
+  }, [services, scope])
 
   useEffect(() => {
     load()
   }, [load])
 
   if (error) return <ErrorBox error={error} />
-  if (!project) return <Spinner />
+  if (!project || !services) return <Spinner />
 
   const remove = async () => {
     if (!confirm(`Delete project "${project.name}" with all its health checks, jobs and secrets? This cannot be undone.`)) return
@@ -311,22 +325,33 @@ export function ProjectDetailPage() {
         project.description && <p className="mb-6 max-w-3xl whitespace-pre-wrap text-sm text-zinc-400">{project.description}</p>
       )}
 
-      <ProjectChecks project={project} />
+      <ProjectServices
+        project={project}
+        services={services}
+        onChanged={() => {
+          reloadServices()
+          load()
+        }}
+      />
 
-      {meta?.modules.vault && <ProjectVault project={project} />}
+      {services.length > 0 && <ScopeBar services={services} value={scope} onChange={setScope} />}
+
+      <ProjectChecks project={project} services={services} scope={scope} />
+
+      {meta?.modules.vault && <ProjectVault project={project} services={services} scope={scope} onChanged={reloadServices} />}
 
       {meta?.modules.scheduler && (
         <section className="mt-8">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-medium text-zinc-200">Jobs</h2>
             {writable && (
-              <Link to={`/jobs/new?project=${project.key}`}>
+              <Link to={`/jobs/new?project=${project.key}${scope && scope !== '-' ? `&service=${scope}` : ''}`}>
                 <Button variant="secondary">Add job</Button>
               </Link>
             )}
           </div>
           {jobs.length === 0 ? (
-            <Empty title="No jobs for this project">Add a keepalive or ping job to keep services awake.</Empty>
+            <Empty title={scope ? 'No jobs here' : 'No jobs for this project'}>Add a keepalive or ping job to keep services awake.</Empty>
           ) : (
             <JobTable jobs={jobs} showProject={false} />
           )}

@@ -165,6 +165,9 @@ func (s *Service) deliver(ctx context.Context, m Message, ch *store.AlertChannel
 	if m.ProjectKey != "" {
 		rec.ProjectKey = &m.ProjectKey
 	}
+	if m.ServiceKey != "" {
+		rec.ServiceKey = &m.ServiceKey
+	}
 	if m.DedupeKey != "" {
 		rec.DedupeKey = &m.DedupeKey
 	}

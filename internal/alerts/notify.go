@@ -12,6 +12,22 @@ import (
 
 func projectLine(name, key string) string { return fmt.Sprintf("%s (%s)", name, key) }
 
+// scopedLine is projectLine plus the service, when the resource has one:
+// "Acme (acme) / backend".
+func scopedLine(name, key string, serviceKey *string) string {
+	if serviceKey == nil || *serviceKey == "" {
+		return projectLine(name, key)
+	}
+	return projectLine(name, key) + " / " + *serviceKey
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 // CheckChanged turns a health status change into an alert.
 //
 //   - → down: "check.down" (only after the check's own failure threshold)
@@ -26,8 +42,8 @@ func (s *Service) CheckChanged(ch *store.HealthChange) {
 		return
 	}
 	checkLine := fmt.Sprintf("Check: %s — %s %s", c.Name, c.Method, c.URL)
-	base := Message{ProjectKey: c.ProjectKey, Link: s.Link("/checks/" + c.ID)}
-	proj := projectLine(c.ProjectName, c.ProjectKey)
+	base := Message{ProjectKey: c.ProjectKey, ServiceKey: deref(c.ServiceKey), Link: s.Link("/checks/" + c.ID)}
+	proj := scopedLine(c.ProjectName, c.ProjectKey, c.ServiceKey)
 
 	switch {
 	case ch.To == store.StatusDown:
@@ -61,13 +77,9 @@ func (s *Service) CheckChanged(ch *store.HealthChange) {
 // on the change from working to failed, so a job that keeps failing doesn't
 // repeat the alert).
 func (s *Service) JobFailed(j *store.Job, run *store.JobRun) {
-	m := Message{Event: EventJobFailed, Severity: "critical", Link: s.Link("/jobs/" + j.ID)}
-	if j.ProjectKey != nil && j.ProjectName != nil {
-		m.ProjectKey = *j.ProjectKey
-		m.Headline = "JOB FAILED — " + projectLine(*j.ProjectName, *j.ProjectKey)
-	} else {
-		m.Headline = "JOB FAILED — " + j.Name
-	}
+	m := Message{Event: EventJobFailed, Severity: "critical", Link: s.Link("/jobs/" + j.ID),
+		ProjectKey: j.ProjectKey, ServiceKey: deref(j.ServiceKey)}
+	m.Headline = "JOB FAILED — " + scopedLine(j.ProjectName, j.ProjectKey, j.ServiceKey)
 	m.Lines = []string{fmt.Sprintf("Job: %s — %s %s", j.Name, j.Config.Method, j.Config.URL)}
 	if run.Error != nil {
 		m.Lines = append(m.Lines, "Error: "+*run.Error)

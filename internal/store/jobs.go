@@ -15,23 +15,28 @@ type HTTPConfig struct {
 }
 
 type Job struct {
-	ID             string     `json:"id"`
-	ProjectID      *string    `json:"project_id"`
-	ProjectKey     *string    `json:"project_key"`
-	ProjectName    *string    `json:"project_name"`
-	Name           string     `json:"name"`
-	Type           string     `json:"type"`
-	Schedule       string     `json:"schedule"`
-	Config         HTTPConfig `json:"config"`
-	TimeoutSeconds int        `json:"timeout_seconds"`
-	Retries        int        `json:"retries"`
-	Enabled        bool       `json:"enabled"`
-	NextRunAt      *time.Time `json:"next_run_at"`
-	LastRunAt      *time.Time `json:"last_run_at"`
-	LastStatus     *string    `json:"last_status"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	HeadersEnc     []byte     `json:"-"`
+	ID              string     `json:"id"`
+	ProjectID       string     `json:"project_id"`
+	ProjectKey      string     `json:"project_key"`
+	ProjectName     string     `json:"project_name"`
+	ServiceID       *string    `json:"service_id"` // nil = belongs to the project directly
+	ServiceKey      *string    `json:"service_key"`
+	ServiceName     *string    `json:"service_name"`
+	EnvironmentID   *string    `json:"environment_id"` // nil = not tied to an environment
+	EnvironmentName *string    `json:"environment"`
+	Name            string     `json:"name"`
+	Type            string     `json:"type"`
+	Schedule        string     `json:"schedule"`
+	Config          HTTPConfig `json:"config"`
+	TimeoutSeconds  int        `json:"timeout_seconds"`
+	Retries         int        `json:"retries"`
+	Enabled         bool       `json:"enabled"`
+	NextRunAt       *time.Time `json:"next_run_at"`
+	LastRunAt       *time.Time `json:"last_run_at"`
+	LastStatus      *string    `json:"last_status"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	HeadersEnc      []byte     `json:"-"`
 }
 
 type JobRun struct {
@@ -48,13 +53,17 @@ type JobRun struct {
 	FinishedAt      *time.Time `json:"finished_at"`
 }
 
-const jobSelect = `SELECT j.id, j.project_id, p.key, p.name, j.name, j.type, j.schedule, j.config, j.headers_enc,
+const jobSelect = `SELECT j.id, j.project_id, p.key, p.name, j.service_id, sv.key, sv.name, j.environment_id, e.name,
+	j.name, j.type, j.schedule, j.config, j.headers_enc,
 	j.timeout_seconds, j.retries, j.enabled, j.next_run_at, j.last_run_at, j.last_status, j.created_at, j.updated_at
-	FROM jobs j LEFT JOIN projects p ON p.id = j.project_id`
+	FROM jobs j JOIN projects p ON p.id = j.project_id
+	LEFT JOIN services sv ON sv.id = j.service_id
+	LEFT JOIN environments e ON e.id = j.environment_id`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	j := &Job{}
-	err := row.Scan(&j.ID, &j.ProjectID, &j.ProjectKey, &j.ProjectName, &j.Name, &j.Type, &j.Schedule, &j.Config,
+	err := row.Scan(&j.ID, &j.ProjectID, &j.ProjectKey, &j.ProjectName, &j.ServiceID, &j.ServiceKey, &j.ServiceName,
+		&j.EnvironmentID, &j.EnvironmentName, &j.Name, &j.Type, &j.Schedule, &j.Config,
 		&j.HeadersEnc, &j.TimeoutSeconds, &j.Retries, &j.Enabled, &j.NextRunAt, &j.LastRunAt, &j.LastStatus,
 		&j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
@@ -63,15 +72,22 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	return j, nil
 }
 
-// ListJobs lists all jobs, or only a project's jobs when projectID is set.
-func (s *Store) ListJobs(ctx context.Context, projectID *string) ([]*Job, error) {
-	q := jobSelect + ` ORDER BY p.name NULLS FIRST, j.name`
-	args := []any{}
-	if projectID != nil {
-		q = jobSelect + ` WHERE j.project_id = $1 ORDER BY j.name`
-		args = append(args, *projectID)
+// JobFilter narrows ListJobs. Zero values mean "no filter".
+type JobFilter struct {
+	ProjectID   string
+	Service     ScopeFilter
+	Environment ScopeFilter
+}
+
+func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]*Job, error) {
+	var b filterBuilder
+	if f.ProjectID != "" {
+		b.add("j.project_id = ?", f.ProjectID)
 	}
-	rows, err := s.Pool.Query(ctx, q, args...)
+	b.scope("j.service_id", f.Service)
+	b.scope("j.environment_id", f.Environment)
+	q := jobSelect + b.sql() + ` ORDER BY p.name, sv.name NULLS FIRST, j.name`
+	rows, err := s.Pool.Query(ctx, q, b.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -93,24 +109,28 @@ func (s *Store) JobByID(ctx context.Context, id string) (*Job, error) {
 
 func (s *Store) CreateJob(ctx context.Context, j *Job, createdBy string) (*Job, error) {
 	var id string
-	err := s.Pool.QueryRow(ctx, `INSERT INTO jobs (project_id, name, type, schedule, config, headers_enc,
-			timeout_seconds, retries, enabled, next_run_at, created_by)
-		VALUES ($1, $2, 'http', $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-		j.ProjectID, j.Name, j.Schedule, j.Config, j.HeadersEnc, j.TimeoutSeconds, j.Retries, j.Enabled,
-		j.NextRunAt, createdBy).Scan(&id)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO jobs (project_id, service_id, environment_id, name, type, schedule,
+			config, headers_enc, timeout_seconds, retries, enabled, next_run_at, created_by)
+		VALUES ($1, $2, $3, $4, 'http', $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+		j.ProjectID, j.ServiceID, j.EnvironmentID, j.Name, j.Schedule, j.Config, j.HeadersEnc, j.TimeoutSeconds,
+		j.Retries, j.Enabled, j.NextRunAt, createdBy).Scan(&id)
 	if err != nil {
-		return nil, err
+		return nil, writeErr(err)
 	}
 	return s.JobByID(ctx, id)
 }
 
+// UpdateJob saves a job's settings and scope. The project never changes here:
+// moving a job to another project is not supported.
 func (s *Store) UpdateJob(ctx context.Context, j *Job) (*Job, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE jobs SET project_id = $2, name = $3, schedule = $4, config = $5,
-			headers_enc = $6, timeout_seconds = $7, retries = $8, enabled = $9, next_run_at = $10, updated_at = now()
+	tag, err := s.Pool.Exec(ctx, `UPDATE jobs SET service_id = $2, environment_id = $3, name = $4, schedule = $5,
+			config = $6, headers_enc = $7, timeout_seconds = $8, retries = $9, enabled = $10, next_run_at = $11,
+			updated_at = now()
 		WHERE id = $1`,
-		j.ID, j.ProjectID, j.Name, j.Schedule, j.Config, j.HeadersEnc, j.TimeoutSeconds, j.Retries, j.Enabled, j.NextRunAt)
+		j.ID, j.ServiceID, j.EnvironmentID, j.Name, j.Schedule, j.Config, j.HeadersEnc, j.TimeoutSeconds, j.Retries,
+		j.Enabled, j.NextRunAt)
 	if err != nil {
-		return nil, err
+		return nil, writeErr(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, ErrNotFound

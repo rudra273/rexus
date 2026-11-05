@@ -75,15 +75,47 @@ export interface Project {
   failing_jobs: number
   health_status: HealthStatus | 'none'
   check_count: number
+  service_count: number
 }
+
+/** An optional group inside a project (frontend, backend, worker…). Organization only — not access control. */
+export interface Service {
+  id: string
+  project_id: string
+  project_key: string
+  key: string
+  name: string
+  description: string
+  repository_url: string | null
+  root_directory: string | null
+  secret_count: number
+  job_count: number
+  check_count: number
+  failing_jobs: number
+  health_status: HealthStatus | 'none'
+  created_at: string
+  updated_at: string
+}
+
+/** Scope fields shared by secrets, jobs and checks. service_* null = the project directly. */
+export interface Scoped {
+  service_id: string | null
+  service_key: string | null
+  service_name: string | null
+}
+
+/** Service filter of a list: '' = all, '-' = the project directly, otherwise a service ID. */
+export type ServiceFilter = string
 
 export type HealthStatus = 'up' | 'degraded' | 'down' | 'unknown'
 
-export interface HealthCheck {
+export interface HealthCheck extends Scoped {
   id: string
   project_id: string
   project_key: string
   project_name: string
+  environment_id: string | null
+  environment: string | null
   name: string
   url: string
   method: string
@@ -132,11 +164,13 @@ export interface SeriesBucket {
   fail: number
 }
 
-export interface Job {
+export interface Job extends Scoped {
   id: string
-  project_id: string | null
-  project_key: string | null
-  project_name: string | null
+  project_id: string
+  project_key: string
+  project_name: string
+  environment_id: string | null
+  environment: string | null
   name: string
   type: string
   schedule: string
@@ -174,10 +208,11 @@ export interface Environment {
   created_at: string
 }
 
-export interface Secret {
+export interface Secret extends Scoped {
   id: string
   environment_id: string
   environment: string
+  project_id: string
   project_key: string
   project_name: string
   name: string
@@ -279,6 +314,7 @@ export interface AlertRecord {
   event: string
   channel_name: string
   project_key: string | null
+  service_key: string | null
   title: string
   status: 'sent' | 'failed'
   error: string | null

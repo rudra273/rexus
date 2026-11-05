@@ -15,17 +15,19 @@ import (
 const maxChecksPerProject = 20
 
 type checkInput struct {
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Method            string `json:"method"`
-	IntervalSeconds   *int   `json:"interval_seconds"`
-	TimeoutSeconds    *int   `json:"timeout_seconds"`
-	ExpectedStatus    string `json:"expected_status"`
-	MaxResponseMS     *int   `json:"max_response_ms"` // null/omitted = don't flag slow responses
-	SSLWarnDays       *int   `json:"ssl_warn_days"`   // null/omitted = don't flag expiring certificates
-	DownThreshold     *int   `json:"down_threshold"`
-	RecoveryThreshold *int   `json:"recovery_threshold"`
-	Enabled           *bool  `json:"enabled"`
+	ServiceID         *string `json:"service_id"`     // "" = the project directly; omitted on update = unchanged
+	EnvironmentID     *string `json:"environment_id"` // "" = no environment; omitted on update = unchanged
+	Name              string  `json:"name"`
+	URL               string  `json:"url"`
+	Method            string  `json:"method"`
+	IntervalSeconds   *int    `json:"interval_seconds"`
+	TimeoutSeconds    *int    `json:"timeout_seconds"`
+	ExpectedStatus    string  `json:"expected_status"`
+	MaxResponseMS     *int    `json:"max_response_ms"` // null/omitted = don't flag slow responses
+	SSLWarnDays       *int    `json:"ssl_warn_days"`   // null/omitted = don't flag expiring certificates
+	DownThreshold     *int    `json:"down_threshold"`
+	RecoveryThreshold *int    `json:"recovery_threshold"`
+	Enabled           *bool   `json:"enabled"`
 }
 
 func intOr(p *int, def int) int {
@@ -132,16 +134,20 @@ func (s *Server) handleListChecks(w http.ResponseWriter, r *http.Request, a *aut
 }
 
 func (s *Server) handleListProjectChecks(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	p, err := s.store.ProjectByKey(r.Context(), r.PathValue("key"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "project not found")
+	f := store.CheckFilter{}
+	var ok bool
+	if f.Service, ok = scopeFilterParam(w, r, "service"); !ok {
 		return
 	}
-	if err != nil {
-		s.internalError(w, r, err)
+	if f.Environment, ok = scopeFilterParam(w, r, "environment"); !ok {
 		return
 	}
-	checks, err := s.store.ListProjectChecks(r.Context(), p.ID)
+	p, ok := s.loadProject(w, r)
+	if !ok {
+		return
+	}
+	f.ProjectID = p.ID
+	checks, err := s.store.ListChecks(r.Context(), f)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -171,6 +177,12 @@ func (s *Server) handleCreateCheck(w http.ResponseWriter, r *http.Request, a *au
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	svc, env, err := s.resolveScope(r, p.ID, in.ServiceID, in.EnvironmentID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c.ServiceID, c.EnvironmentID = idOrNil(svc), envIDOrNil(env)
 	if n, err := s.store.CountProjectChecks(r.Context(), p.ID); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -179,11 +191,16 @@ func (s *Server) handleCreateCheck(w http.ResponseWriter, r *http.Request, a *au
 		return
 	}
 	created, err := s.store.CreateHealthCheck(r.Context(), c, a.user.ID)
+	if errors.Is(err, store.ErrInvalidScope) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "check.create", "check", created.ID, map[string]any{"name": created.Name, "project": p.Key, "url": created.URL})
+	s.audit(r, a, "check.create", "check", created.ID, scopeDetails(map[string]any{"name": created.Name, "project": p.Key,
+		"url": created.URL}, created.ServiceKey, created.EnvironmentName))
 	writeJSON(w, http.StatusCreated, map[string]any{"check": created})
 }
 
@@ -218,17 +235,36 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request, a *au
 		return
 	}
 	oldURL := c.URL
+	before := *c
 	if err := in.apply(c); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Omitted scope fields keep their value; "" clears them.
+	svcIn, envIn := keepIfOmitted(in.ServiceID, c.ServiceID), keepIfOmitted(in.EnvironmentID, c.EnvironmentID)
+	svc, env, err := s.resolveScope(r, c.ProjectID, svcIn, envIn)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c.ServiceID, c.EnvironmentID = idOrNil(svc), envIDOrNil(env)
 	// A new URL is a new target: start the status over.
 	updated, err := s.store.UpdateHealthCheck(r.Context(), c, c.URL != oldURL)
+	if errors.Is(err, store.ErrInvalidScope) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "check.update", "check", updated.ID, map[string]any{"name": updated.Name, "project": updated.ProjectKey, "enabled": updated.Enabled})
+	s.audit(r, a, "check.update", "check", updated.ID, scopeDetails(map[string]any{"name": updated.Name,
+		"project": updated.ProjectKey, "enabled": updated.Enabled}, updated.ServiceKey, updated.EnvironmentName))
+	if !sameID(before.ServiceID, updated.ServiceID) || !sameID(before.EnvironmentID, updated.EnvironmentID) {
+		s.audit(r, a, "check.move", "check", updated.ID, map[string]any{"name": updated.Name, "project": updated.ProjectKey,
+			"from_service": strOr(before.ServiceKey, ""), "service": strOr(updated.ServiceKey, ""),
+			"from_environment": strOr(before.EnvironmentName, ""), "environment": strOr(updated.EnvironmentName, "")})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"check": updated})
 }
 

@@ -36,6 +36,9 @@ type secretInput struct {
 	Notes        string            `json:"notes"`
 	Tags         []string          `json:"tags"`
 	CustomFields map[string]string `json:"custom_fields"`
+	// ServiceID is only read on create (nil/"" = the project directly).
+	// Changing it later is an explicit move: POST /api/secrets/{id}/move.
+	ServiceID *string `json:"service_id"`
 }
 
 // applyMeta validates the non-value fields and copies them onto sec.
@@ -235,7 +238,10 @@ func (s *Server) handleDeleteEnvironment(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusConflict, fmt.Sprintf("'%s' still has %d secret(s) — delete them first", e.Name, e.SecretCount))
 		return
 	}
-	if err := s.store.DeleteEnvironment(r.Context(), e.ID); err != nil {
+	if err := s.store.DeleteEnvironment(r.Context(), e.ID); errors.Is(err, store.ErrInUse) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("'%s' is still used by jobs or health checks — change their environment first", e.Name))
+		return
+	} else if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
@@ -264,12 +270,37 @@ func (s *Server) loadSecret(w http.ResponseWriter, r *http.Request) (*store.Secr
 }
 
 func secretTarget(sec *store.Secret) map[string]any {
-	return map[string]any{"name": sec.Name, "project": sec.ProjectKey, "environment": sec.EnvironmentName}
+	return map[string]any{"name": sec.Name, "project": sec.ProjectKey, "environment": sec.EnvironmentName,
+		"service": strOr(sec.ServiceKey, "")}
+}
+
+// scopeLabel names a secret's scope in messages: "the project" or "service 'api'".
+func scopeLabel(serviceKey *string) string {
+	if serviceKey == nil {
+		return "the project"
+	}
+	return "service '" + *serviceKey + "'"
 }
 
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	q := r.URL.Query()
-	f := store.SecretFilter{Query: q.Get("q"), Tag: strings.TrimSpace(q.Get("tag"))}
+	svcFilter, ok := scopeFilterParam(w, r, "service")
+	if !ok {
+		return
+	}
+	f := store.SecretFilter{Query: q.Get("q"), Tag: strings.TrimSpace(q.Get("tag")), Service: svcFilter}
+	if p := q.Get("project"); p != "" {
+		proj, err := s.store.ProjectByKey(r.Context(), p)
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusOK, map[string]any{"secrets": []any{}})
+			return
+		}
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		f.ProjectID = proj.ID
+	}
 	if env := q.Get("environment"); env != "" {
 		if !store.IsUUID(env) {
 			writeJSON(w, http.StatusOK, map[string]any{"secrets": []any{}})
@@ -316,10 +347,20 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request, a *a
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	sec := &store.Secret{ID: crypto.NewUUID(), EnvironmentID: env.ID}
+	sec := &store.Secret{ID: crypto.NewUUID(), ProjectID: env.ProjectID, EnvironmentID: env.ID}
 	if err := in.applyMeta(sec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	svc, _, err := s.resolveScope(r, env.ProjectID, in.ServiceID, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sec.ServiceID = idOrNil(svc)
+	var svcKey *string
+	if svc != nil {
+		svcKey = &svc.Key
 	}
 	if in.Value == nil {
 		writeError(w, http.StatusBadRequest, "value is required")
@@ -336,7 +377,11 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request, a *a
 	}
 	created, err := s.store.CreateSecret(r.Context(), sec, ct, wrapped, a.user.ID)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "this environment already has a secret named '"+sec.Name+"'")
+		writeError(w, http.StatusConflict, fmt.Sprintf("%s already has a secret named '%s' in %s", scopeLabel(svcKey), sec.Name, env.Name))
+		return
+	}
+	if errors.Is(err, store.ErrInvalidScope) {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
@@ -385,7 +430,7 @@ func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request, a *a
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	case errors.Is(err, store.ErrConflict):
-		writeError(w, http.StatusConflict, "this environment already has a secret named '"+sec.Name+"'")
+		writeError(w, http.StatusConflict, fmt.Sprintf("%s already has a secret named '%s' in %s", scopeLabel(sec.ServiceKey), sec.Name, sec.EnvironmentName))
 		return
 	case err != nil:
 		s.internalError(w, r, err)
@@ -401,6 +446,54 @@ func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request, a *a
 	}
 	s.audit(r, a, "secret.update", "secret", updated.ID, details)
 	writeJSON(w, http.StatusOK, map[string]any{"secret": secretView(updated, a)})
+}
+
+// handleMoveSecret moves a secret between the project itself and its services
+// (same project, same environment). History and encrypted values are kept.
+func (s *Server) handleMoveSecret(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	if !requireWrite(w, a) {
+		return
+	}
+	sec, ok := s.loadSecret(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		ServiceID *string `json:"service_id"` // null / "" = the project directly
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	svc, _, err := s.resolveScope(r, sec.ProjectID, in.ServiceID, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	to := idOrNil(svc)
+	if sameID(to, sec.ServiceID) {
+		writeError(w, http.StatusBadRequest, "the secret is already there")
+		return
+	}
+	var toKey *string
+	if svc != nil {
+		toKey = &svc.Key
+	}
+	moved, err := s.store.MoveSecret(r.Context(), sec.ID, to, a.user.ID)
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, fmt.Sprintf("%s already has a secret named '%s' in %s", scopeLabel(toKey), sec.Name, sec.EnvironmentName))
+		return
+	case errors.Is(err, store.ErrInvalidScope):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		s.internalError(w, r, err)
+		return
+	}
+	details := secretTarget(moved)
+	details["from_service"] = strOr(sec.ServiceKey, "")
+	s.audit(r, a, "secret.move", "secret", moved.ID, details)
+	writeJSON(w, http.StatusOK, map[string]any{"secret": secretView(moved, a)})
 }
 
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request, a *authCtx) {
