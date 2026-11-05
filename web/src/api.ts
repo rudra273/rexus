@@ -141,5 +141,25 @@ export interface SecretVersion {
   current: boolean
 }
 
-export const canWrite =(role: Role) => role === 'owner' || role === 'admin' || role === 'contributor'
+export interface Invite {
+  id: string
+  email: string
+  role: Role
+  invited_by: string | null
+  expires_at: string
+  created_at: string
+}
+
+export interface AuditRow {
+  id: number
+  at: string
+  actor: string
+  action: string
+  target_type: string | null
+  target_id: string | null
+  ip: string
+  details: Record<string, unknown>
+}
+
+export const canWrite = (role: Role) => role === 'owner' || role === 'admin' || role === 'contributor'
 export const isAdmin = (role: Role) => role === 'owner' || role === 'admin'

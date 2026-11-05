@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type Server struct {
 	loginLimiter *auth.Limiter // per IP and per email
 	mfaLimiter   *auth.Limiter // per user
 	setupLimiter *auth.Limiter // per IP
+	linkLimiter  *auth.Limiter // bad invite/reset tokens, per IP
 }
 
 func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, log *slog.Logger, version string) *Server {
@@ -52,6 +54,7 @@ func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *sche
 		loginLimiter: auth.NewLimiter(5, 15*time.Minute),
 		mfaLimiter:   auth.NewLimiter(5, 15*time.Minute),
 		setupLimiter: auth.NewLimiter(10, 15*time.Minute),
+		linkLimiter:  auth.NewLimiter(20, 15*time.Minute),
 	}
 }
 
@@ -105,6 +108,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("POST /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
+	// Invite and password-reset links (the token in the URL is the credential).
+	mux.HandleFunc("GET /api/join/{token}", s.handleJoinInfo)
+	mux.HandleFunc("POST /api/join/{token}", s.handleJoinAccept)
+	mux.HandleFunc("GET /api/reset/{token}", s.handleResetInfo)
+	mux.HandleFunc("POST /api/reset/{token}", s.handleResetUse)
 
 	// Session exists, 2FA may still be pending
 	mux.HandleFunc("GET /api/auth/me", s.partial(s.handleMe))
@@ -115,7 +123,21 @@ func (s *Server) Handler() http.Handler {
 
 	// Fully authenticated
 	mux.HandleFunc("POST /api/auth/2fa/disable", s.authed(s.handle2FADisable))
+	mux.HandleFunc("POST /api/auth/password", s.authed(s.handleChangePassword))
+	mux.HandleFunc("POST /api/auth/logout-all", s.authed(s.handleLogoutAll))
 	mux.HandleFunc("GET /api/settings", s.authed(s.handleSettings))
+
+	// Team (owner / admin; checked inside each handler)
+	mux.HandleFunc("GET /api/users", s.authed(s.handleListUsers))
+	mux.HandleFunc("PATCH /api/users/{id}", s.authed(s.handleUpdateUser))
+	mux.HandleFunc("DELETE /api/users/{id}", s.authed(s.handleDeleteUser))
+	mux.HandleFunc("POST /api/users/{id}/reset-password", s.authed(s.handleResetPasswordLink))
+	mux.HandleFunc("POST /api/users/{id}/reset-2fa", s.authed(s.handleReset2FA))
+	mux.HandleFunc("GET /api/invites", s.authed(s.handleListInvites))
+	mux.HandleFunc("POST /api/invites", s.authed(s.handleCreateInvite))
+	mux.HandleFunc("DELETE /api/invites/{id}", s.authed(s.handleRevokeInvite))
+	mux.HandleFunc("POST /api/owner/transfer", s.authed(s.handleTransferOwnership))
+	mux.HandleFunc("GET /api/audit", s.authed(s.handleAudit))
 
 	mux.HandleFunc("GET /api/projects", s.authed(s.handleListProjects))
 	mux.HandleFunc("POST /api/projects", s.authed(s.handleCreateProject))
@@ -155,7 +177,31 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("/", s.spaHandler())
 
-	return s.recoverer(s.securityHeaders(s.csrf(s.limitBody(mux))))
+	return s.recoverer(s.securityHeaders(s.ipGate(s.csrf(s.limitBody(mux)))))
+}
+
+// ipGate enforces REXUS_IP_ALLOWLIST. Loopback is always allowed so the
+// container health check and local tools keep working.
+func (s *Server) ipGate(next http.Handler) http.Handler {
+	if s.cfg.IPAllowlist == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ip, err := netip.ParseAddr(clientIP(r)); err == nil {
+			if ip.IsLoopback() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			for _, p := range s.cfg.IPAllowlist {
+				if p.Contains(ip) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		s.log.Debug("blocked by IP allowlist", "ip", clientIP(r), "path", r.URL.Path)
+		http.Error(w, "access from your IP address is not allowed", http.StatusForbidden)
+	})
 }
 
 // ---- middleware ----
@@ -276,14 +322,35 @@ func (s *Server) internalError(w http.ResponseWriter, r *http.Request, err error
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
-// clientIP uses the TCP peer address. (Proxy header handling — for
-// Cloudflare Tunnel etc. — comes with IP allowlist enforcement in Phase 3.)
+// clientIP returns the visitor's IP. Behind a local proxy or tunnel
+// (cloudflared, Tailscale serve, Docker's network) the TCP peer is the proxy
+// itself, so the proxy's header is used — but only when the peer is loopback or
+// a private address. A direct connection from the internet can't spoof it.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	peer = peer.Unmap()
+	if peer.IsLoopback() || peer.IsPrivate() {
+		if v := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); v != "" {
+			if a, err := netip.ParseAddr(v); err == nil {
+				return a.Unmap().String()
+			}
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			// The rightmost entry is the one our own proxy appended.
+			if a, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
+				return a.Unmap().String()
+			}
+		}
+	}
+	return peer.String()
 }
 
 func newSetupCode() string {

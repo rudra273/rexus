@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 2** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, and the encrypted **Vault** (environments, secret versions, expiry). See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 3** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, and **team management** (invites, four roles, password resets, audit log). See [plan.md](plan.md) for the full roadmap.
 
 ## Quick start (Docker)
 
@@ -57,14 +57,34 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 | `rexus serve` | Start web UI + API + scheduler |
 | `rexus owner create --email you@company.com` | Create the owner (instead of the setup screen) |
 | `rexus owner reset` | Lost password or 2FA: set a new password, reset 2FA, log out all owner sessions |
+| `rexus owner transfer --to EMAIL` | Hand ownership to another active user (you become an admin) |
 | `rexus migrate` | Run database migrations and exit |
 | `rexus keygen` | Generate a `REXUS_MASTER_KEY` |
 
 Whoever can run commands on the server can recover the owner — no secret owner key lives in code or env vars.
 
+## Team and permissions
+
+Rexus is invite-only; there is no public signup. The owner and admins add people from **Users → Invite user**: pick an email and a role, and Rexus shows a one-time link to send them. They open it, choose their own name and password, and set up 2FA. Admins never see anyone's password.
+
+| | Owner | Admin | Contributor | Viewer |
+|---|:-:|:-:|:-:|:-:|
+| See dashboard, projects, secret names and expiry, job history | ✅ | ✅ | ✅ | ✅ |
+| Create/edit projects, secrets, jobs; reveal and copy secret values | ✅ | ✅ | ✅ | ❌ |
+| Invite, disable, remove users; password-reset links; reset 2FA; audit log | ✅ | ✅ (only contributors and viewers) | ❌ | ❌ |
+| Manage admins; transfer ownership | ✅ | ❌ | ❌ | ❌ |
+
+- Role changes and disabling take effect on the very next request; disabling logs the person out immediately.
+- A **password-reset link** is one-time and expires in 24 hours; using it logs the user out everywhere. **Reset 2FA** forces them to enrol again at next login.
+- Invite links expire after 7 days and only work once. Only a hash of each link is stored, so a link can't be shown again — use **New link** to replace it. Rexus doesn't send email yet (that arrives with alerts), so you share the link yourself.
+- Everyone can change their own password and **log out of all devices** from **Settings**.
+- The **Audit log** (owner and admins) records logins, secret reveals and copies, and every change — secret values are never written to it.
+
 ## Configuration
 
 Everything is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error. Toggles are shown read-only in **Settings**.
+
+**IP allowlist.** `REXUS_IP_ALLOWLIST` takes comma-separated IPs or ranges, e.g. `203.0.113.5,10.0.0.0/8`; `0.0.0.0` allows everyone. Localhost is always allowed. Behind a tunnel or proxy on the same machine, Rexus reads the visitor's real IP from the `CF-Connecting-IP` or `X-Forwarded-For` header — but only when the connection itself comes from a local or private address, so a direct connection from the internet can't fake it. **Docker Desktop (Mac/Windows) hides real client IPs** (everything appears to come from Docker's own gateway), so the allowlist only works there when a tunnel/proxy supplies the header; on a Linux server it sees the true address.
 
 **Keep `REXUS_MASTER_KEY` safe and separate from backups.** It encrypts 2FA secrets, job headers (e.g. API keys) and every vault secret. Each secret version gets its own random data key, which is encrypted with the master key — the master key is never stored in the database, so a stolen database can't be decrypted. **If you lose the master key, the vault can't be recovered.**
 

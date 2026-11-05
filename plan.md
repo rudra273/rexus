@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–2 built** — next is Phase 3 (Team: invites, roles, audit log page). See §13.
+Status: **Phases 1–3 built** — next is Phase 4 (Health checks & dashboard). See §13.
 
 ---
 
@@ -465,7 +465,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** all project keys are stored in Rexus, encrypted in the DB, with history.
 
-### Phase 3 — Team
+### Phase 3 — Team ✅ built
+> Built Nov 2026. Notes: invite links are copied and shared by the admin — emailing them waits for SMTP in Phase 5; invites last 7 days, reset links 24 hours, both single-use and stored only as hashes; owner transfer needs password + 2FA code (UI) or server access (`rexus owner transfer`); users can change their own password and log out of all devices; `REXUS_IP_ALLOWLIST` reads the real IP from a local proxy's header (see README caveat for Docker Desktop); lockdown mode and the 2FA mode are enforced.
 - Invites (link; emailed if SMTP set, else copy), roles: Owner / Admin / Contributor / Viewer.
 - Permission checks on every API call (§5).
 - User management: disable, remove, role change, password-reset link, reset 2FA.

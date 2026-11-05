@@ -37,7 +37,8 @@ Usage:
   rexus serve                       Start web UI + API + scheduler
   rexus owner create --email EMAIL  Create the owner (prompts for password)
   rexus owner reset                 Reset the owner's password and 2FA
-  rexus migrate                     Run database migrations and exit
+  rexus owner transfer --to EMAIL   Hand ownership to another active user
+  rexus migrate                    Run database migrations and exit
   rexus keygen                      Generate a new REXUS_MASTER_KEY
   rexus version                     Print version
 
@@ -202,7 +203,7 @@ func cmdMigrate() error {
 
 func cmdOwner(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rexus owner create --email EMAIL | rexus owner reset")
+		return errors.New("usage: rexus owner create --email EMAIL | rexus owner reset | rexus owner transfer --to EMAIL")
 	}
 	cfg, log, err := setup()
 	if err != nil {
@@ -299,8 +300,53 @@ func cmdOwner(args []string) error {
 		fmt.Println("Log in at", cfg.BaseURL, "and set up 2FA again.")
 		return nil
 
+	case "transfer":
+		fs := flag.NewFlagSet("owner transfer", flag.ContinueOnError)
+		to := fs.String("to", "", "email of the user who becomes owner (required)")
+		yes := fs.Bool("yes", false, "skip the confirmation prompt")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *to == "" {
+			return errors.New("--to is required")
+		}
+		cur, err := st.Owner(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("no owner exists yet — use `rexus owner create`")
+		}
+		if err != nil {
+			return err
+		}
+		target, err := st.UserByEmail(ctx, *to)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("no user with email %s", *to)
+		}
+		if err != nil {
+			return err
+		}
+		if target.ID == cur.ID {
+			return errors.New("that user is already the owner")
+		}
+		if target.Status != "active" {
+			return errors.New("that user is disabled — enable them first")
+		}
+		if !*yes {
+			fmt.Printf("Make %s the owner? %s will become an admin. Type YES to confirm: ", target.Email, cur.Email)
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			if strings.TrimSpace(line) != "YES" {
+				return errors.New("cancelled")
+			}
+		}
+		if err := st.TransferOwnership(ctx, cur.ID, target.ID); err != nil {
+			return err
+		}
+		st.Audit(ctx, store.AuditEntry{ActorUserID: &cur.ID, Actor: "cli", Action: "owner.transfer",
+			TargetType: "user", TargetID: target.ID, Details: map[string]any{"from": cur.Email, "to": target.Email}})
+		fmt.Printf("Done. %s is now the owner; %s is an admin.\n", target.Email, cur.Email)
+		return nil
+
 	default:
-		return fmt.Errorf("unknown owner command %q (use create or reset)", args[0])
+		return fmt.Errorf("unknown owner command %q (use create, reset or transfer)", args[0])
 	}
 }
 

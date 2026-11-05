@@ -82,6 +82,8 @@ export function SettingsPage() {
         </Card>
       </section>
 
+      <SecuritySection />
+
       {instance && (
         <section className="mt-8 max-w-2xl">
           <h2 className="mb-1 font-medium text-zinc-200">Instance</h2>
@@ -101,6 +103,61 @@ export function SettingsPage() {
         </section>
       )}
     </>
+  )
+}
+
+function SecuritySection() {
+  const { setSession } = useAuth()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [ok, setOk] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setOk(false)
+    if (next !== confirmPw) return setError("New passwords don't match")
+    setBusy(true)
+    try {
+      await api('/api/auth/password', { method: 'POST', body: { current_password: current, new_password: next } })
+      setCurrent('')
+      setNext('')
+      setConfirmPw('')
+      setOk(true)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const logoutAll = async () => {
+    if (!confirm('Log out of Rexus on all your devices, including this one?')) return
+    await api('/api/auth/logout-all', { method: 'POST' }).catch(() => {})
+    setSession(null)
+  }
+
+  return (
+    <section className="mt-8 max-w-2xl">
+      <h2 className="mb-3 font-medium text-zinc-200">Security</h2>
+      <Card className="p-4">
+        <form onSubmit={submit} className="max-w-sm space-y-3">
+          <div className="text-sm font-medium text-zinc-300">Change password</div>
+          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} placeholder="Current password" autoComplete="current-password" required />
+          <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="New password (10+ characters)" autoComplete="new-password" minLength={10} required />
+          <Input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} placeholder="Repeat new password" autoComplete="new-password" required />
+          <ErrorBox error={error} />
+          {ok && <div className="text-sm text-emerald-400">Password changed. Your other devices were logged out.</div>}
+          <Button type="submit" variant="secondary" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</Button>
+        </form>
+        <div className="mt-5 border-t border-zinc-800 pt-4">
+          <Button variant="secondary" onClick={logoutAll}>Log out of all devices</Button>
+        </div>
+      </Card>
+    </section>
   )
 }
 

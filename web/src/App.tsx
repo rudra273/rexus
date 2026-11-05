@@ -1,15 +1,27 @@
-import { NavLink, Navigate, Outlet, Route, Routes } from 'react-router-dom'
-import { api } from './api'
+import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { api, isAdmin } from './api'
 import { useAuth } from './auth'
 import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from './pages/auth'
 import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
+import { AcceptInvitePage, AuditPage, ResetPasswordPage, UsersPage } from './pages/team'
 import { VaultPage } from './pages/vault'
 import { cx, Spinner } from './ui'
 
 export default function App() {
   const { loading, meta, user, next } = useAuth()
+  const { pathname } = useLocation()
+
+  // Invite and password-reset links work whether or not anyone is logged in.
+  if (pathname.startsWith('/invite/') || pathname.startsWith('/reset/')) {
+    return (
+      <Routes>
+        <Route path="/invite/:token" element={<AcceptInvitePage />} />
+        <Route path="/reset/:token" element={<ResetPasswordPage />} />
+      </Routes>
+    )
+  }
 
   if (loading) return <Spinner />
   if (!meta) return <div className="p-8 text-sm text-red-300">Can't reach the Rexus server.</div>
@@ -49,6 +61,12 @@ export default function App() {
           </>
         )}
         {meta.modules.vault && <Route path="/vault" element={<VaultPage />} />}
+        {isAdmin(user.role) && (
+          <>
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/audit" element={<AuditPage />} />
+          </>
+        )}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
@@ -62,6 +80,12 @@ function Layout() {
     { to: '/', label: 'Dashboard', end: true },
     ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', end: false }] : []),
     ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', end: false }] : []),
+    ...(user && isAdmin(user.role)
+      ? [
+          { to: '/users', label: 'Users', end: false },
+          { to: '/audit', label: 'Audit log', end: false },
+        ]
+      : []),
     { to: '/settings', label: 'Settings', end: false },
   ]
 
