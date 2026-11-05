@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api, isAdmin, type BackupStatus, type HealthStatus, type HealthCheck, type Job, type Project, type Secret, type SeriesBucket } from '../api'
+import { api, isAdmin, type AlertChannel, type AlertRecord, type BackupStatus, type HealthStatus, type HealthCheck, type Job, type Project, type Secret, type SeriesBucket } from '../api'
 import { useAuth } from '../auth'
 import { NavIcon } from '../icons'
 import { Badge, Button, Card, Empty, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
@@ -42,6 +42,12 @@ const RANGES = [
   { id: '30d', label: '30d', ago: '30 days ago' },
 ] as const
 type RangeId = (typeof RANGES)[number]['id']
+
+/** Alert channels plus recent deliveries, admin only. */
+interface AlertsStatus {
+  channels: AlertChannel[]
+  history: AlertRecord[]
+}
 
 /** A status change as returned by /api/checks/events. */
 interface RecentEvent {
@@ -105,11 +111,13 @@ export function DashboardPage() {
   const [jobs, loadJobs] = useSection<Job[]>()
   const [secrets, loadSecrets] = useSection<Secret[]>()
   const [events, loadEvents] = useSection<RecentEvent[]>()
+  const [alertsStatus, loadAlerts] = useSection<AlertsStatus>()
   const [backup, loadBackup] = useSection<BackupStatus>()
   // Selected project key, '' = all my projects. Lives in the URL (?project=key, shareable) and falls back
   // to the last choice made in this browser.
   const [params, setParams] = useSearchParams()
   const rawFilter = params.get('project') ?? readStoredFilter()
+  const tv = params.get('tv') === '1'
   const range: RangeId = RANGES.find((r) => r.id === params.get('range'))?.id ?? '24h'
   const rangeInfo = RANGES.find((r) => r.id === range)!
   const setParam = (name: string, value: string) =>
@@ -124,6 +132,15 @@ export function DashboardPage() {
     setParam('project', key)
   }
   const setRange = (id: RangeId) => setParam('range', id === '24h' ? '' : id)
+  const setTv = (on: boolean) => {
+    setParam('tv', on ? '1' : '')
+    try {
+      if (on) void document.documentElement.requestFullscreen?.()
+      else if (document.fullscreenElement) void document.exitFullscreen()
+    } catch {
+      /* fullscreen is optional */
+    }
+  }
   const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
@@ -138,10 +155,16 @@ export function DashboardPage() {
     if (meta?.modules.scheduler) calls.push(loadJobs(api<{ jobs: Job[] }>('/api/jobs').then((r) => r.jobs)))
     if (meta?.modules.vault) calls.push(loadSecrets(api<{ secrets: Secret[] }>('/api/secrets?expiring=30').then((r) => r.secrets)))
     if (showBackup) calls.push(loadBackup(api<BackupStatus>('/api/backups/status')))
+    if (admin) {
+      calls.push(loadAlerts(Promise.all([
+        api<{ channels: AlertChannel[] }>('/api/alerts/channels'),
+        api<{ alerts: AlertRecord[] }>('/api/alerts/history?limit=200'),
+      ]).then(([c, h]) => ({ channels: c.channels, history: h.alerts }))))
+    }
     await Promise.all(calls)
     setNow(Date.now())
     setRefreshing(false)
-  }, [meta, showBackup, range, loadProjects, loadChecks, loadSeries, loadEvents, loadJobs, loadSecrets, loadBackup])
+  }, [meta, admin, showBackup, range, loadProjects, loadChecks, loadSeries, loadEvents, loadAlerts, loadJobs, loadSecrets, loadBackup])
 
   useEffect(() => {
     refresh()
@@ -175,6 +198,7 @@ export function DashboardPage() {
   if (meta?.modules.scheduler && jobs.error) failed.push('jobs')
   if (meta?.modules.vault && secrets.error) failed.push('secrets')
   if (showBackup && backup.error) failed.push('backup status')
+  if (admin && alertsStatus.error) failed.push('alert status')
 
   const items: AttentionItem[] = [
     ...down.map((c): AttentionItem => ({
@@ -188,6 +212,10 @@ export function DashboardPage() {
     ...(expiring ?? []).filter((s) => (s.days_left ?? 0) <= 7).map((s): AttentionItem => ({
       id: `s${s.id}`, tone: 'red', label: 'Key expiring', title: s.name, to: `/projects/${s.project_key}`,
       sub: `${scopeName(s)} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
+    })),
+    ...(alertsStatus.data ? failingChannels(alertsStatus.data) : []).map((ch): AttentionItem => ({
+      id: `a${ch.id}`, tone: 'red', label: 'Alerts failing', title: ch.name, to: '/alerts',
+      sub: 'Your last alert to this channel didn’t go through — you may miss real alerts',
     })),
     ...degraded.map((c): AttentionItem => ({
       id: `g${c.id}`, tone: 'amber', label: 'Degraded', title: c.name, to: `/checks/${c.id}`,
@@ -203,7 +231,7 @@ export function DashboardPage() {
     })),
   ]
 
-  const times = [projects, checks, series, events, jobs, secrets, backup].map((s) => s.at).filter((t): t is number => t != null)
+  const times = [projects, checks, series, events, alertsStatus, jobs, secrets, backup].map((s) => s.at).filter((t): t is number => t != null)
   const updated = times.length ? Math.min(...times) : null
 
   const projectOptions = projects.data ? [...projects.data].sort((a, b) => a.name.localeCompare(b.name)) : []
@@ -215,6 +243,22 @@ export function DashboardPage() {
     .sort((a, b) => SEVERITY[a.health_status] - SEVERITY[b.health_status] || a.name.localeCompare(b.name))
   const unmonitored = shownProjects.filter((p) => !byProject.has(p.id))
 
+  if (tv) {
+    return (
+      <TvBoard
+        projects={monitored}
+        byProject={byProject}
+        series={series.data}
+        unmonitoredCount={unmonitored.length}
+        items={items}
+        stale={failed.length > 0}
+        updated={updated}
+        now={now}
+        onExit={() => setTv(false)}
+      />
+    )
+  }
+
   return (
     <>
       <PageHeader
@@ -223,6 +267,7 @@ export function DashboardPage() {
         actions={
           <>
             <RangeSwitch value={range} onChange={setRange} />
+            <Button variant="secondary" onClick={() => setTv(true)} aria-label="Open TV mode" title="Full-screen status board for a wall display">TV mode</Button>
             {projectOptions.length > 1 && (
               <Select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by project" className="w-48!">
                 <option value="">All projects</option>
@@ -309,6 +354,15 @@ export function DashboardPage() {
       )}
 
       <IncidentsCard section={events} filter={filter} range={rangeInfo} />
+
+      {(meta?.modules.scheduler || meta?.modules.vault) && (
+        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {meta?.modules.scheduler && <UpcomingJobsCard jobs={jobs.data ? inScope(jobs.data) : null} error={!!jobs.error} />}
+          {meta?.modules.vault && <ExpiringKeysCard secrets={expiring} error={!!secrets.error} />}
+        </div>
+      )}
+
+      {admin && <AlertStatusCard section={alertsStatus} />}
 
       {showBackup && <BackupCard section={backup} />}
     </>
@@ -655,5 +709,243 @@ function IncidentsCard({ section, filter, range }: { section: Section<RecentEven
         </button>
       )}
     </Card>
+  )
+}
+
+// ───────────────────────── jobs, keys, alert channels ─────────────────────────
+
+function ListCard({ title, count, to, toLabel, children }: { title: string; count?: number; to: string; toLabel: string; children: ReactNode }) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2.5">
+        <span className="text-sm font-medium text-zinc-200">
+          {title}{count != null && <span className="text-zinc-500"> · {count}</span>}
+        </span>
+        <Link to={to} className="text-xs text-emerald-400 hover:underline">{toLabel}</Link>
+      </div>
+      {children}
+    </Card>
+  )
+}
+
+function UpcomingJobsCard({ jobs, error }: { jobs: Job[] | null; error: boolean }) {
+  if (!jobs) return <Card className="px-4 py-3 text-sm text-zinc-400">{error ? 'Jobs are unavailable right now.' : 'Loading jobs…'}</Card>
+  const active = jobs.filter((j) => j.enabled)
+  const next = [...active].sort((a, b) => new Date(a.next_run_at ?? 8.64e15).getTime() - new Date(b.next_run_at ?? 8.64e15).getTime()).slice(0, 5)
+  return (
+    <ListCard title="Next job runs" count={active.length} to="/jobs" toLabel="All pings">
+      {next.length === 0 ? (
+        <div className="px-4 py-3 text-sm text-zinc-500">{jobs.length === 0 ? 'No jobs yet.' : 'All jobs are paused.'}</div>
+      ) : (
+        <ul className="divide-y divide-zinc-800/70">
+          {next.map((j) => (
+            <li key={j.id}>
+              <Link to={`/jobs/${j.id}`} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+                <span className="flex min-w-0 items-center gap-2">
+                  <StatusDot status={j.last_status} />
+                  <span className="truncate text-zinc-100">{j.name}</span>
+                  <span className="truncate text-xs text-zinc-500">{scopeName(j)}</span>
+                  {j.last_status === 'failed' && <Badge tone="red">failing</Badge>}
+                </span>
+                <span className="shrink-0 text-xs text-zinc-400" title={j.next_run_at ? fmtTime(j.next_run_at) : undefined}>
+                  {j.next_run_at ? timeAgo(j.next_run_at) : '—'}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </ListCard>
+  )
+}
+
+function ExpiringKeysCard({ secrets, error }: { secrets: Secret[] | null; error: boolean }) {
+  if (!secrets) return <Card className="px-4 py-3 text-sm text-zinc-400">{error ? 'Keys are unavailable right now.' : 'Loading keys…'}</Card>
+  const soonest = [...secrets].sort((a, b) => (a.days_left ?? 9999) - (b.days_left ?? 9999)).slice(0, 5)
+  return (
+    <ListCard title="Keys expiring soon" count={secrets.length} to="/vault" toLabel="Open vault">
+      {soonest.length === 0 ? (
+        <div className="flex items-center gap-2 px-4 py-3 text-sm text-zinc-500"><StatusDot status="up" />No keys expire in the next 30 days.</div>
+      ) : (
+        <ul className="divide-y divide-zinc-800/70">
+          {soonest.map((k) => (
+            <li key={k.id}>
+              <Link to={`/projects/${k.project_key}`} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+                <span className="min-w-0">
+                  <span className="text-zinc-100">{k.name}</span>
+                  <span className="ml-2 text-xs text-zinc-500">{scopeName(k)} · {k.environment}</span>
+                </span>
+                <ExpiryBadge secret={k} />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </ListCard>
+  )
+}
+
+const CHANNEL_LABEL: Record<string, string> = { telegram: 'Telegram', discord: 'Discord', slack: 'Slack', email: 'Email' }
+
+/** The most recent delivery attempt (alert or test) to each channel, by channel name. */
+function lastDelivery(history: AlertRecord[], channelName: string): AlertRecord | undefined {
+  return history.find((h) => h.channel_name === channelName) // history is newest first
+}
+
+/** Enabled channels whose latest delivery failed. */
+function failingChannels(a: AlertsStatus): AlertChannel[] {
+  return a.channels.filter((c) => c.enabled && lastDelivery(a.history, c.name)?.status === 'failed')
+}
+
+function AlertStatusCard({ section }: { section: Section<AlertsStatus> }) {
+  const a = section.data
+  if (!a) return <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">{section.error ? 'Alert channel status is unavailable right now.' : 'Loading alert channels…'}</Card>
+  const active = a.channels.filter((c) => c.enabled)
+  const failing = failingChannels(a)
+  const problem = a.channels.length === 0 ? 'No alert channels are set up — nobody gets notified when something breaks.' : active.length === 0 ? 'All alert channels are switched off — nobody gets notified.' : null
+  return (
+    <Card className="mb-6 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2.5">
+        <span className="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <StatusDot status={problem ? 'degraded' : failing.length ? 'down' : 'up'} />
+          Alert channels <span className="text-zinc-500">· {active.length} active</span>
+        </span>
+        <Link to="/alerts" className="text-xs text-emerald-400 hover:underline">Manage alerts</Link>
+      </div>
+      {problem ? (
+        <div className="px-4 py-3 text-sm text-amber-300">
+          {problem} <Link to="/alerts" className="text-emerald-400 hover:underline">Set up alerts</Link>
+        </div>
+      ) : (
+        <ul className="divide-y divide-zinc-800/70">
+          {a.channels.slice(0, 6).map((c) => {
+            const d = lastDelivery(a.history, c.name)
+            return (
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
+                <span className="flex min-w-0 items-center gap-2">
+                  <Badge>{CHANNEL_LABEL[c.type] ?? c.type}</Badge>
+                  <span className="truncate text-zinc-100">{c.name}</span>
+                  {!c.enabled && <Badge>off</Badge>}
+                </span>
+                <span className="text-xs">
+                  {!d ? (
+                    <span className="text-zinc-500">nothing sent yet — <Link to="/alerts" className="text-emerald-400 hover:underline">send a test</Link></span>
+                  ) : d.status === 'sent' ? (
+                    <span className="text-zinc-400" title={fmtTime(d.at)}><span className="text-emerald-400">✓ delivered</span> {timeAgo(d.at)}{d.event === 'test' ? ' (test)' : ''}</span>
+                  ) : (
+                    <span className="text-red-300" title={fmtTime(d.at)}>✕ failed {timeAgo(d.at)}{d.error ? ` · ${d.error}` : ''}</span>
+                  )}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+// ───────────────────────── TV / wall mode ─────────────────────────
+
+/** A full-screen, glanceable board for a second monitor: one big tile per project, red when something is wrong. */
+function TvBoard({ projects, byProject, series, unmonitoredCount, items, stale, updated, now, onExit }: {
+  projects: Project[]
+  byProject: Map<string, HealthCheck[]>
+  series: AllSeries | null
+  unmonitoredCount: number
+  items: AttentionItem[]
+  stale: boolean
+  updated: number | null
+  now: number
+  onExit: () => void
+}) {
+  const [clock, setClock] = useState(() => new Date())
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000)
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onExit()
+    window.addEventListener('keydown', esc)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [onExit])
+
+  const bad = items.filter((i) => i.tone === 'red').length
+  const warn = items.length - bad
+  const tone = bad ? 'red' : warn ? 'amber' : 'green'
+  const banner = bad ? `${bad} ${bad === 1 ? 'issue needs' : 'issues need'} attention` : warn ? `${warn} ${warn === 1 ? 'warning' : 'warnings'}` : 'All systems operational'
+  const ring = { red: 'border-red-500/50 bg-red-500/10 text-red-300', amber: 'border-amber-500/50 bg-amber-500/10 text-amber-200', green: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' }[tone]
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-auto bg-zinc-950 p-6 sm:p-10">
+      <div className="mx-auto flex max-w-[1800px] flex-col gap-8">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className={cx('flex items-center gap-4 rounded-2xl border px-6 py-4 text-3xl font-semibold sm:text-5xl', ring)}>
+            <span className={cx('inline-block h-4 w-4 rounded-full sm:h-6 sm:w-6', tone === 'red' ? 'bg-red-400' : tone === 'amber' ? 'bg-amber-400' : 'bg-emerald-400')} aria-hidden="true" />
+            {banner}
+          </div>
+          <div className="text-right">
+            <div className="text-4xl font-semibold tabular-nums text-zinc-100 sm:text-6xl">{clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            <div className="mt-1 text-sm text-zinc-500">
+              {stale ? 'Some data may be out of date · ' : ''}
+              {updated ? `updated ${timeAgo(new Date(updated).toISOString())}` : 'not updated yet'}
+            </div>
+            <button type="button" onClick={onExit} className="mt-2 rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800">Exit · Esc</button>
+          </div>
+        </div>
+
+        {items.length > 0 && (
+          <ul className="grid gap-3 lg:grid-cols-2">
+            {items.slice(0, 6).map((i) => (
+              <li key={i.id} className={cx('rounded-xl border px-5 py-3 text-lg', i.tone === 'red' ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'border-amber-500/40 bg-amber-500/10 text-amber-100')}>
+                <span className="font-semibold">{i.label}</span> · {i.title}
+                <div className="truncate text-sm opacity-70">{i.sub}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {projects.map((p) => {
+            const cs = (byProject.get(p.id) ?? []).filter((c) => c.enabled)
+            const downN = cs.filter((c) => c.status === 'down').length
+            const degN = cs.filter((c) => c.status === 'degraded').length
+            const projTone = p.failing_jobs > 0 || downN ? 'red' : degN || cs.some((c) => isStale(c, now)) ? 'amber' : 'green'
+            const uptime = series ? uptimeOf(cs.flatMap((c) => series.series[c.id] ?? [])) : null
+            return (
+              <div
+                key={p.id}
+                className={cx('rounded-2xl border p-6', projTone === 'red' ? 'border-red-500/50 bg-red-500/10' : projTone === 'amber' ? 'border-amber-500/40 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900/60')}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3 text-2xl font-semibold text-zinc-50">
+                    <StatusDot status={p.health_status} />
+                    <span className="truncate">{p.name}</span>
+                  </div>
+                  <div className="text-3xl font-semibold tabular-nums text-zinc-100">{fmtPct(uptime)}</div>
+                </div>
+                <div className="mt-3 text-lg text-zinc-400">
+                  {downN ? <span className="text-red-300">{downN} down</span> : null}
+                  {downN && degN ? ' · ' : null}
+                  {degN ? <span className="text-amber-300">{degN} degraded</span> : null}
+                  {!downN && !degN ? `${cs.length} ${cs.length === 1 ? 'check' : 'checks'} healthy` : null}
+                  {p.failing_jobs > 0 ? <span className="text-red-300"> · {p.failing_jobs} job{p.failing_jobs === 1 ? '' : 's'} failing</span> : null}
+                </div>
+                <ul className="mt-4 space-y-1.5 text-base text-zinc-300">
+                  {cs.slice(0, 4).map((c) => (
+                    <li key={c.id} className="flex items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2"><StatusDot status={c.status} /><span className="truncate">{c.name}</span></span>
+                      <span className="shrink-0 tabular-nums text-zinc-500">{c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'}</span>
+                    </li>
+                  ))}
+                  {cs.length > 4 && <li className="text-sm text-zinc-500">+{cs.length - 4} more</li>}
+                </ul>
+              </div>
+            )
+          })}
+        </div>
+        {unmonitoredCount > 0 && <div className="text-sm text-zinc-600">{unmonitoredCount} project{unmonitoredCount === 1 ? '' : 's'} without health checks not shown</div>}
+      </div>
+    </div>
   )
 }

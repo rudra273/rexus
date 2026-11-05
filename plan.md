@@ -16,8 +16,8 @@ A technical tool for running and watching our projects. It runs on our own machi
 |---|---|
 | **Projects** | Each project holds its URLs, services, keys and jobs. |
 | **Vault** | Encrypted API keys / secrets per project. Reminds before a key expires. |
-| **Scheduler** | Cron jobs: ping websites, keep Supabase & other APIs awake, call webhooks, run checks. |
-| **Dashboard** | Health of every project: up/down, response time, SSL expiry, failed jobs, expiring keys. |
+| **Scheduler** | Cron jobs: ping websites, keep Supabase & other APIs awake, call webhooks, run checks. Shown together with health checks on the **Pings** page. |
+| **Dashboard** | Health of every project: up/down, response time, SSL expiry, failed jobs, expiring keys, incidents, alert-channel status, and a full-screen TV mode. |
 | **Users & Roles** | Owner/Admin invite team members; 4 simple roles: Owner, Admin, Contributor, Viewer. |
 | **Alerts** | Notify on failures and upcoming expiries. |
 | **Backups** | Optional backup copy of the database to local / external storage, managed from the UI. |
@@ -611,7 +611,7 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 - Useful follow-on settings: default check intervals/timeouts, expiry-warning thresholds, and data retention. Reuse existing controls where supported; new defaults or writable instance settings require explicit backend validation, persistence, authorization, and audit coverage. Do not imply these are already supported.
 
 **5. Sidebar and shared visual polish**
-- **Workspace:** Dashboard, Projects, Vault, Jobs.
+- **Workspace:** Dashboard, Projects, Vault, Pings (health checks + jobs; labelled Health when the scheduler module is off).
 - **Administration:** Alerts, API & integrations, Users, Audit log, Backups.
 - **Bottom:** Settings and a profile row with avatar/initials, name, and role. Administration and module entries remain conditional on permissions and enabled features.
 - Use a consistent outline icon set (18–20px), approximately 240px sidebar width, 40–44px navigation rows, 14px medium-weight labels, and quiet group captions.
@@ -645,3 +645,9 @@ When a secret changes in the Vault, Rexus pushes it into the deployment's platfo
 - Vault seal/unseal mode.
 - Explicit secret sharing between services; job credentials bound to vault secrets; per-service alert routing; cross-project moves.
 - MIT license + public open-source release.
+
+---
+
+### Phase 12 — Dashboard & Pings upgrade ✅ built
+> Built Nov 2026. Backend: `GET /api/checks/events` (recent status changes across visible checks), `PATCH /api/checks/{id}` and `PATCH /api/jobs/{id}` (`{enabled}` — pause/resume without resending the whole form), `POST /api/projects/{key}/pause` (`{paused}` — pause or resume every check and job in a project; audited as `project.pings_pause` / `project.pings_resume`). No migration. Frontend: sidebar **Jobs** became **Pings** (route stays `/jobs`) and lists checks and jobs together with search, project/status/type filters, worst-first sort, Run/Pause/Resume/Edit row actions and a per-project bulk pause; `/checks/new` creates a check with a project picker. Dashboard: one Health tile, URL-backed project filter and 24h/7d/30d range, uptime-bar hover details, an incidents list, next job runs, keys expiring soonest, alert-channel status (owner/admin; a failing channel also appears under Needs attention), and a full-screen TV mode (`?tv=1`, Esc to leave).
+> Not done: alert-channel "last test passed" is derived from the delivery log (`alerts_sent`, last 200 rows), not a stored per-channel test result; bulk pause is per project only; pausing does not schedule an automatic resume.

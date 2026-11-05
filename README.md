@@ -1,6 +1,6 @@
 # Rexus
 
-A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
+A self-hosted control panel for technical teams: projects, health checks, scheduled pings (keepalives), encrypted secrets and alerts — in one place. One Go binary with the React UI built in.
 
 > Status: **Phase 7** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, **alerts** (Telegram, Slack, Discord, email), **backups** with one-step restore, and a read-only **API** for other tools. All seven planned phases are built. See [plan.md](plan.md) for the roadmap.
 
@@ -92,7 +92,29 @@ Open a project and click **Add check** to watch a URL. Each check is configured 
 
 A check is 🟢 **Up**, 🟡 **Degraded** (slow, or SSL expiring), or 🔴 **Down**. A project shows the worst status among its enabled checks. Each check page has a response-time chart (1 hour to 30 days), uptime for 24 hours / 7 days / 30 days, the SSL expiry date, and a list of status changes with the reason.
 
-The **Dashboard** shows what is healthy and what needs attention across the projects you can see — check, job and key-expiry counts, a health table, and a project filter. A section that fails to load says so instead of showing zeros. The **Projects** page is the directory (search, health filter, grid or list). Probe results are kept for 30 days.
+The **Dashboard** shows what is healthy and what needs attention across the projects you can see:
+
+- **Summary tiles** — one **Health** tile (healthy / active checks, a proportion bar and chips for down, degraded, unknown, stale and paused), plus failing jobs and keys expiring in 30 days. Each tile links to where you fix it.
+- **Needs attention** — down checks, failing jobs, keys expiring within 7 days, degraded or stale checks, and (for owners and admins) alert channels whose last delivery failed.
+- **Project cards** — 24-hour uptime and, per check, a response-time line with a status strip underneath. Hover a bar for its time window, result and response time.
+- **Range switcher (24h / 7d / 30d)** — drives the charts, the uptime figures and the incident list. It, and the project filter, live in the URL (`?range=7d&project=acme`), so a filtered view can be shared or bookmarked.
+- **Incidents** — each down or degraded period with when it started, when it recovered and how long it lasted.
+- **Next job runs**, **Keys expiring soon** and (owners and admins) **Alert channels**, which shows whether each channel is on and whether its last alert or test arrived. A channel that is failing is also flagged under Needs attention, because a silent alert channel means you miss real outages.
+- **TV mode** — the *TV mode* button opens a full-screen board for a wall display: one large tile per project, red when something is wrong, with a clock. Press Esc to leave.
+
+A section that fails to load says so instead of showing zeros. The **Projects** page is the directory (search, health filter, grid or list). Probe results are kept for 30 days.
+
+### Pings
+
+**Pings** in the sidebar (named **Health** when the scheduler module is off) lists every health check and every scheduled job in one place, so you don't have to open each project:
+
+- **New check** and **New job** start from here; a new check asks which project it belongs to.
+- **Search and filters** — by name, project or URL; by status (needs attention, down, degraded, job failing, healthy, paused); and by type (health check or job). Filters are kept in the URL.
+- **Worst first** is the default order: down and failing at the top, paused at the bottom. Switch to *Name* if you prefer.
+- **Row actions** — **Run** (probe or run now), **Pause** / **Resume**, and **Edit**, straight from the table. Pausing a check stops its probes and alerts until you resume it.
+- **Pause all in <project>** — pick a project, then pause every check and job in it before a deploy or maintenance window, and resume them afterwards. Both are recorded in the audit log.
+
+Viewers can look but not change anything.
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 

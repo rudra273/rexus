@@ -5,7 +5,8 @@ import { useAuth } from './auth'
 import { NavIcon, type IconName } from './icons'
 import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from './pages/auth'
 import { CheckDetailPage, CheckFormPage } from './pages/health'
-import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
+import { JobDetailPage, JobFormPage } from './pages/jobs'
+import { PingsPage } from './pages/pings'
 import { DashboardPage } from './pages/dashboard'
 import { ProjectDetailPage, ProjectNewPage, ProjectsPage } from './pages/projects'
 import { ProfilePage } from './pages/profile'
@@ -62,7 +63,7 @@ export default function App() {
         <Route path="/projects/new" element={isAdmin(user.role) ? <ProjectNewPage /> : <Navigate to="/projects" replace />} />
         <Route path="/projects/:key" element={<ProjectDetailPage />} />
         <Route path="/projects/:key/checks/new" element={<CheckFormPage />} />
-        <Route path="/jobs" element={<JobsPage />} />
+        <Route path="/jobs" element={<PingsPage />} />
         <Route path="/checks/new" element={<CheckFormPage />} />
         <Route path="/checks/:id" element={<CheckDetailPage />} />
         <Route path="/checks/:id/edit" element={<CheckFormPage />} />

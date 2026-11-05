@@ -268,3 +268,15 @@ func (s *Store) PruneRuns(ctx context.Context, olderThan time.Duration) error {
 	_, err := s.Pool.Exec(ctx, `DELETE FROM job_runs WHERE started_at < $1`, time.Now().Add(-olderThan))
 	return err
 }
+
+// SetJobEnabled pauses or resumes one job. nextRun is when a resumed job fires next (nil when pausing).
+func (s *Store) SetJobEnabled(ctx context.Context, id string, enabled bool, nextRun *time.Time) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE jobs SET enabled = $2, next_run_at = $3, updated_at = now() WHERE id = $1`, id, enabled, nextRun)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

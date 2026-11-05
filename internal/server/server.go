@@ -217,7 +217,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{key}/checks", s.authed(s.handleCreateCheck))
 	mux.HandleFunc("GET /api/checks/{id}", s.authed(s.handleGetCheck))
 	mux.HandleFunc("PUT /api/checks/{id}", s.authed(s.handleUpdateCheck))
+	mux.HandleFunc("PATCH /api/checks/{id}", s.authed(s.handlePatchCheck))
 	mux.HandleFunc("DELETE /api/checks/{id}", s.authed(s.handleDeleteCheck))
+	mux.HandleFunc("POST /api/projects/{key}/pause", s.authed(s.handlePauseProject))
 	mux.HandleFunc("POST /api/checks/{id}/run", s.authed(s.handleRunCheck))
 	mux.HandleFunc("GET /api/checks/{id}/series", s.authed(s.handleCheckSeries))
 
@@ -226,6 +228,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /api/jobs", s.authed(s.handleCreateJob))
 		mux.HandleFunc("GET /api/jobs/{id}", s.authed(s.handleGetJob))
 		mux.HandleFunc("PUT /api/jobs/{id}", s.authed(s.handleUpdateJob))
+		mux.HandleFunc("PATCH /api/jobs/{id}", s.authed(s.handlePatchJob))
 		mux.HandleFunc("DELETE /api/jobs/{id}", s.authed(s.handleDeleteJob))
 		mux.HandleFunc("POST /api/jobs/{id}/run", s.authed(s.handleRunJob))
 		mux.HandleFunc("GET /api/jobs/{id}/runs", s.authed(s.handleListRuns))

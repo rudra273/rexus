@@ -446,3 +446,27 @@ func (s *Store) PruneHealthResults(ctx context.Context, olderThan time.Duration)
 	_, err := s.Pool.Exec(ctx, `DELETE FROM health_results WHERE checked_at < $1`, time.Now().Add(-olderThan))
 	return err
 }
+
+// SetCheckEnabled pauses or resumes one check. Resuming schedules it for an immediate probe.
+func (s *Store) SetCheckEnabled(ctx context.Context, id string, enabled bool) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE health_checks SET enabled = $2,
+			next_check_at = CASE WHEN $2 THEN now() END, updated_at = now() WHERE id = $1`, id, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetProjectChecksEnabled pauses or resumes every check of a project and returns how many changed.
+func (s *Store) SetProjectChecksEnabled(ctx context.Context, projectID string, enabled bool) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE health_checks SET enabled = $2,
+			next_check_at = CASE WHEN $2 THEN now() END, updated_at = now()
+		WHERE project_id = $1 AND enabled <> $2`, projectID, enabled)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { api, canWrite, type HealthCheck, type Job, type JobRun, type Project } from '../api'
+import { api, canWrite, type Job, type JobRun, type Project } from '../api'
 import { useAuth } from '../auth'
-import { fmtPct, HealthBadge } from './health'
 import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, useEnvironments, useServices } from './services'
 import {
   Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, cx, fmtTime, timeAgo,
@@ -54,104 +53,6 @@ export function JobTable({ jobs, showProject = true, showUrl = true }: { jobs: J
               <td className="px-4 py-2.5 text-zinc-400 mono">{j.schedule}</td>
               <td className="px-4 py-2.5 text-zinc-400">{timeAgo(j.last_run_at)}</td>
               <td className="px-4 py-2.5 text-zinc-400">{j.enabled ? timeAgo(j.next_run_at) : '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  )
-}
-
-/** One place for everything that runs on a schedule: health checks (always on) and cron jobs (scheduler module). */
-export function JobsPage() {
-  const { user, meta } = useAuth()
-  const scheduler = !!meta?.modules.scheduler
-  const writable = !!user && canWrite(user.role)
-  const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [checks, setChecks] = useState<HealthCheck[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const load = () => {
-      api<{ checks: HealthCheck[] }>('/api/checks').then((r) => setChecks(r.checks)).catch((e) => setError(e.message))
-      if (scheduler) api<{ jobs: Job[] }>('/api/jobs').then((r) => setJobs(r.jobs)).catch((e) => setError(e.message))
-    }
-    load()
-    const t = setInterval(load, 30_000)
-    return () => clearInterval(t)
-  }, [scheduler])
-
-  if (error && !checks && !jobs) return <ErrorBox error={error} persistent />
-  if (!checks || (scheduler && !jobs)) return <Spinner />
-  return (
-    <>
-      <PageHeader
-        title={scheduler ? 'Pings' : 'Health'}
-        subtitle={scheduler ? 'Health checks watch your services; jobs ping them on a schedule to keep them awake' : 'Health checks watch your services'}
-        actions={writable && (
-          <>
-            <Link to="/checks/new"><Button variant={scheduler ? 'secondary' : 'primary'}>New check</Button></Link>
-            {scheduler && <Link to="/jobs/new"><Button>New job</Button></Link>}
-          </>
-        )}
-      />
-      <ErrorBox error={error} />
-
-      <section className="mb-8">
-        <h2 className="mb-2 font-medium text-zinc-200">Health checks <span className="text-xs font-normal text-zinc-500">· {checks.length}</span></h2>
-        {checks.length === 0 ? (
-          <Empty title="No health checks yet">Add a check to watch a site or API: status code, response time and SSL expiry.</Empty>
-        ) : (
-          <CheckTable checks={checks} />
-        )}
-      </section>
-
-      {scheduler && jobs && (
-        <section>
-          <h2 className="mb-2 font-medium text-zinc-200">Jobs <span className="text-xs font-normal text-zinc-500">· {jobs.length}</span></h2>
-          {jobs.length === 0 ? (
-            <Empty title="No jobs yet">Create a job to ping a website or keep Supabase and other APIs awake.</Empty>
-          ) : (
-            <JobTable jobs={jobs} showUrl={false} />
-          )}
-        </section>
-      )}
-    </>
-  )
-}
-
-function CheckTable({ checks }: { checks: HealthCheck[] }) {
-  return (
-    <Card className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-sm">
-        <thead className="border-b border-zinc-800 text-left text-xs text-zinc-500">
-          <tr>
-            <th className="px-4 py-2.5 font-medium">Check</th>
-            <th className="px-4 py-2.5 font-medium">Project</th>
-            <th className="px-4 py-2.5 font-medium">Status</th>
-            <th className="px-4 py-2.5 font-medium">Response</th>
-            <th className="px-4 py-2.5 font-medium">Uptime 24h</th>
-            <th className="px-4 py-2.5 font-medium">Last checked</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-800/70">
-          {checks.map((c) => (
-            <tr key={c.id} className="hover:bg-zinc-800/30">
-              <td className="px-4 py-2.5">
-                <Link to={`/checks/${c.id}`} className="flex items-center gap-2">
-                  <StatusDot status={c.enabled ? c.status : 'disabled'} />
-                  <span className="font-medium text-zinc-100 hover:underline">{c.name}</span>
-                  <ServiceBadge r={c} />
-                  <EnvBadge env={c.environment} />
-                </Link>
-              </td>
-              <td className="px-4 py-2.5 text-zinc-400">
-                <Link to={`/projects/${c.project_key}`} className="hover:underline">{c.project_name}</Link>
-              </td>
-              <td className="px-4 py-2.5"><HealthBadge status={c.status} paused={!c.enabled} /></td>
-              <td className="px-4 py-2.5 text-zinc-400">{c.enabled && c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'}</td>
-              <td className="px-4 py-2.5 text-zinc-400">{c.enabled ? fmtPct(c.uptime_24h) : '—'}</td>
-              <td className="px-4 py-2.5 text-zinc-400">{c.last_checked_at ? timeAgo(c.last_checked_at) : 'not yet'}</td>
             </tr>
           ))}
         </tbody>
