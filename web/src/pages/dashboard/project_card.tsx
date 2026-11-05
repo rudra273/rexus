@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { type HealthCheck, type Project } from '../../api'
+import { NavIcon } from '../../icons'
 import { Badge, Card, StatusDot, WebsiteLink, cx, fmtTime, hostOf, timeAgo } from '../../ui'
 import { Sparkline, UptimeBar, uptimeOf } from '../charts'
 import { fmtPct, HealthBadge } from '../health'
@@ -13,15 +14,18 @@ export function ProjectHealthCard({ project: p, checks, series, now, range }: { 
   const all = checks.filter((c) => c.enabled).flatMap((c) => series?.series[c.id] ?? [])
   const uptime = series ? uptimeOf(all) : null
   return (
-    <Card className="p-4">
+    <Card className="group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-1.5">
-        <Link to={`/projects/${p.key}`} className="group flex min-w-0 items-center gap-2.5">
+        <Link to={`/projects/${p.key}`} data-project-link title={`Open ${p.name}`} className="group flex min-w-0 items-center gap-2.5 after:absolute after:inset-0 after:content-['']">
           <StatusDot status={p.health_status} />
           <span className="truncate text-base font-semibold text-zinc-50 group-hover:underline">{p.name}</span>
           {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} job{p.failing_jobs === 1 ? '' : 's'} failing</Badge>}
+          <span className="inline-flex shrink-0 items-center gap-1 text-xs text-zinc-400 transition group-hover/card:text-zinc-100">
+            <NavIcon name="chevron" size={16} />
+          </span>
         </Link>
-        {p.website_url && <WebsiteLink url={p.website_url} title={`Open ${hostOf(p.website_url)}`} className="shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-800" />}
+        {p.website_url && <WebsiteLink url={p.website_url} title={`Open ${hostOf(p.website_url)}`} className="relative z-10 shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-800" />}
         </div>
         <div className="shrink-0 text-right">
           <div className="text-lg font-semibold tabular-nums text-zinc-50">{fmtPct(uptime)}</div>
@@ -33,7 +37,7 @@ export function ProjectHealthCard({ project: p, checks, series, now, range }: { 
           const b = series?.series[c.id] ?? []
           const old = isStale(c, now)
           return (
-            <Link key={c.id} to={`/checks/${c.id}`} aria-label={`Open check ${c.name}`} className="group block rounded-md px-2 py-2 transition hover:bg-zinc-800/40">
+            <Link key={c.id} to={`/checks/${c.id}`} aria-label={`Open check ${c.name}`} className="group relative z-10 block rounded-md px-2 py-2 transition hover:bg-zinc-800/60">
               <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
                 <span className="flex min-w-0 items-center gap-2">
                   <StatusDot status={c.enabled ? c.status : 'disabled'} />
@@ -46,6 +50,7 @@ export function ProjectHealthCard({ project: p, checks, series, now, range }: { 
                   {c.enabled && <span title="Last response time">{c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'}</span>}
                   <span className="text-zinc-600">·</span>
                   <span className={cx(old && 'text-amber-300')} title={fmtTime(c.last_checked_at)}>{c.last_checked_at ? timeAgo(c.last_checked_at) : 'not yet'}</span>
+                  <span className="text-zinc-600 transition group-hover:text-zinc-100"><NavIcon name="chevron" size={14} /></span>
                 </span>
               </div>
               {series ? (

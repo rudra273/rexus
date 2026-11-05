@@ -22,7 +22,7 @@ function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
 
 export type IconName =
   | 'dashboard' | 'projects' | 'vault' | 'jobs' | 'pings' | 'alerts' | 'api' | 'users' | 'audit'
-  | 'backups' | 'settings' | 'profile' | 'menu' | 'close' | 'refresh' | 'search' | 'grid' | 'list' | 'tv' | 'external'
+  | 'backups' | 'settings' | 'profile' | 'menu' | 'close' | 'refresh' | 'search' | 'grid' | 'list' | 'tv' | 'external' | 'chevron'
 
 export function NavIcon({ name, size }: { name: IconName; size?: number }) {
   return <Icon size={size}>{PATHS[name]}</Icon>
@@ -125,6 +125,7 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
   list: <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />,
   external: <path d="M14 4h6v6M20 4 10 14M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />,
+  chevron: <path d="m9 6 6 6-6 6" />,
   // A wall-mounted screen: used for the full-screen TV mode.
   tv: (
     <>
