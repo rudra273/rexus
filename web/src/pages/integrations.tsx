@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, type ApiToken } from '../api'
-import { DeployTokensOverview } from './deploy_tokens'
+import { DeployTokensOverview, HistoryButton, useTokenHistory } from './deploy_tokens'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, cx, fmtTime, timeAgo } from '../ui'
 
 const STATUS_TONE = { active: 'green', expired: 'amber', revoked: 'zinc' } as const
@@ -11,6 +11,12 @@ export function IntegrationsPage() {
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<{ token: string; meta: ApiToken } | null>(null)
+  const history = useTokenHistory(tokens)
+  const [tab, setTab] = useState<'tokens' | 'docs'>(window.location.hash === '#docs' ? 'docs' : 'tokens')
+  const switchTab = (t: 'tokens' | 'docs') => {
+    setTab(t)
+    window.history.replaceState(null, '', t === 'docs' ? '#docs' : window.location.pathname)
+  }
 
   const load = useCallback(() => {
     api<{ tokens: ApiToken[]; max: number }>('/api/tokens')
@@ -45,15 +51,44 @@ export function IntegrationsPage() {
     <>
       <PageHeader
         title="API & integrations"
-        subtitle="Let other tools — your CRM, CI, a status board — read your projects' status by project key."
-        actions={<Button onClick={() => setCreating(true)} disabled={active >= max}>Create token</Button>}
+        subtitle="Tokens for the tools and apps that talk to Rexus — and the docs for using them."
       />
+      <div className="mb-6 flex gap-1 border-b border-zinc-800">
+        {([['tokens', 'Tokens'], ['docs', 'Docs']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => switchTab(id)}
+            className={cx(
+              '-mb-px border-b-2 px-4 py-2 text-sm',
+              tab === id ? 'border-emerald-500 text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-300',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <ErrorBox error={error} />
 
+      {tab === 'docs' ? (
+        <ApiDocs />
+      ) : (
+      <>
       <section className="mt-2">
-        <h2 className="mb-3 font-medium text-zinc-200">API tokens</h2>
-        {tokens.length === 0 ? (
-          <Empty title="No tokens yet">Create a token, then call the API with <code>Authorization: Bearer &lt;token&gt;</code>. See the docs below.</Empty>
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="font-medium text-zinc-200">API tokens</h2>
+          <div className="flex items-center gap-2">
+            <HistoryButton past={history.past} shown={history.shown} onToggle={history.toggle} />
+            <Button variant="secondary" onClick={() => setCreating(true)} disabled={active >= max}>Create API token</Button>
+          </div>
+        </div>
+        <p className="mb-3 max-w-3xl text-sm text-zinc-500">
+          For your CRM, CI or a status board: read project status, health and secret names by project key.
+        </p>
+        {(history.visible ?? []).length === 0 ? (
+          <Empty title={tokens.length > 0 ? 'No active tokens' : 'No tokens yet'}>
+            {tokens.length > 0 ? 'Revoked and expired tokens are under History.' : <>Create a token, then call the API with <code>Authorization: Bearer &lt;token&gt;</code>. See the Docs tab.</>}
+          </Empty>
         ) : (
           <Card className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm">
@@ -68,7 +103,7 @@ export function IntegrationsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/70">
-                {tokens.map((t) => (
+                {(history.visible ?? []).map((t) => (
                   <tr key={t.id} className={cx('align-top', t.status !== 'active' && 'opacity-60')}>
                     <td className="px-4 py-2.5">
                       <div className="font-medium text-zinc-100">{t.name}</div>
@@ -106,8 +141,8 @@ export function IntegrationsPage() {
       </section>
 
       <DeployTokensOverview canRevoke />
-
-      <ApiDocs />
+      </>
+      )}
 
       {creating && (
         <CreateTokenModal
@@ -254,14 +289,14 @@ STRIPE_KEY="sk_live_…"`,
   {
     method: 'GET',
     path: '/api/v1/projects',
-    role: 'any token',
+    role: 'API token',
     summary: 'Every project with its overall status.',
     example: `{ "projects": [ { "key": "acme-web", "name": "Acme Website", "status": "down", "check_count": 3, "job_count": 2, "failing_jobs": 0, ... } ] }`,
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/status',
-    role: 'any token',
+    role: 'API token',
     summary: 'The compact answer for a CRM: is this project OK? Status is up, degraded, down, unknown (not checked yet) or none (no checks). Add ?service=<key> for one service, ?service=- for the project’s own resources, ?environment=<name> for one environment.',
     example: `{
   "key": "acme-web", "name": "Acme Website",
@@ -275,66 +310,79 @@ STRIPE_KEY="sk_live_…"`,
   {
     method: 'GET',
     path: '/api/v1/projects/{key}',
-    role: 'any token',
+    role: 'API token',
     summary: 'Everything about one project: its services, checks, jobs, and secrets expiring in 30 days.',
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/services',
-    role: 'any token',
+    role: 'API token',
     summary: 'The project’s services (optional groups such as frontend or backend), each with its own status and counts.',
     example: `{ "services": [ { "key": "backend", "name": "Backend API", "status": "up", "check_count": 2, "job_count": 1, "failing_jobs": 0, "secret_count": 6, ... } ] }`,
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/checks',
-    role: 'any token',
+    role: 'API token',
     summary: 'Health checks: service, environment, status, since when, last response time and code, 24-hour uptime, SSL expiry. URLs are returned without their query string. Filter with ?service= and ?environment= (use - for "none").',
     example: `{ "checks": [ { "id": "…", "name": "Website", "url": "https://acme.com/health", "status": "up", "last_response_ms": 84, "uptime_24h": 99.93, "ssl_expires_at": "2027-01-10T00:00:00Z", ... } ] }`,
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/jobs',
-    role: 'any token',
+    role: 'API token',
     summary: 'Cron jobs: service, environment, schedule, whether enabled, last result and time. Their URLs, headers and bodies are never returned. Filter with ?service= and ?environment=.',
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/secrets',
-    role: 'any token',
+    role: 'API token',
     summary: 'Secret names, service, environment, tags, expiry date and days left. Never values. Contributor tokens also get notes and custom fields. Filter with ?service= and ?environment=.',
   },
   {
     method: 'GET',
     path: '/api/v1/secrets/expiring?days=30',
-    role: 'any token',
+    role: 'API token',
     summary: 'Secrets across all projects that expire within the given number of days (default 30), including ones already expired.',
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/secrets/{environment}/{name}',
-    role: 'any token',
+    role: 'API token',
     summary: 'Metadata of one secret that belongs to the project itself, e.g. /api/v1/projects/acme-web/secrets/prod/STRIPE_KEY. A service’s secret with the same name is never returned here.',
   },
   {
     method: 'GET',
     path: '/api/v1/projects/{key}/services/{service}/secrets/{environment}/{name}',
-    role: 'any token',
+    role: 'API token',
     summary: 'Metadata of one secret of a service, e.g. /api/v1/projects/acme-web/services/backend/secrets/prod/DATABASE_URL.',
   },
   {
     method: 'POST',
     path: '/api/v1/projects/{key}/secrets/{environment}/{name}/reveal',
-    role: 'contributor token only',
+    role: 'contributor API token only',
     summary: 'The secret’s current value. A viewer token gets 403. Every call is written to the audit log under the token’s name.',
     example: `{ "project": "acme-web", "service": null, "environment": "prod", "name": "STRIPE_KEY", "version": 3, "value": "sk_live_…" }`,
   },
   {
     method: 'POST',
     path: '/api/v1/projects/{key}/services/{service}/secrets/{environment}/{name}/reveal',
-    role: 'contributor token only',
+    role: 'contributor API token only',
     summary: 'The current value of a service’s secret. Audited like the call above.',
   },
+]
+
+/** Which kind of token each endpoint is for — shown as headings in the docs. */
+function endpointGroup(e: Endpoint): 'any' | 'apps' | 'tools' {
+  if (e.path === '/api/v1/health') return 'any'
+  if (e.path === '/api/v1/env') return 'apps'
+  return 'tools'
+}
+
+const GROUPS: { id: 'any' | 'apps' | 'tools'; title: string; blurb: string }[] = [
+  { id: 'any', title: 'Any token', blurb: 'Works with both kinds of token.' },
+  { id: 'apps', title: 'For your apps — deploy token', blurb: 'An app fetches its own environment variables when it starts. Create the token on the project’s page.' },
+  { id: 'tools', title: 'For other tools — API token', blurb: 'Read-only status and metadata, for a CRM, CI or a status board. Create the token on the Tokens tab.' },
 ]
 
 function ApiDocs() {
@@ -346,7 +394,11 @@ function ApiDocs() {
 
       <Card className="mb-4 space-y-3 p-4 text-sm text-zinc-400">
         <div className="font-medium text-zinc-200">Quick start</div>
-        <p>Send your token in the <code>Authorization</code> header. Only API tokens work here — a browser login does not.</p>
+        <p>
+          Send your token in the <code>Authorization</code> header — a browser login does not work here. There are two kinds of token:
+          <b className="text-zinc-300"> API tokens</b> (Tokens tab) read status and metadata for other tools, and
+          <b className="text-zinc-300"> deploy tokens</b> (a project’s page) let one app fetch its own environment variables at startup.
+        </p>
         <Code>{`export REXUS_URL=${base}
 export REXUS_TOKEN=rxt_…
 
@@ -359,24 +411,30 @@ curl -s -H "Authorization: Bearer $REXUS_TOKEN" \\
         </p>
       </Card>
 
-      <div className="space-y-2">
-        {ENDPOINTS.map((e) => (
-          <Card key={e.method + e.path} className="p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={e.method === 'GET' ? 'sky' : 'amber'}>{e.method}</Badge>
-              <code className="break-all text-sm text-zinc-100">{e.path}</code>
-              <span className="ml-auto text-xs text-zinc-500">{e.role}</span>
-            </div>
-            <p className="mt-2 text-sm text-zinc-400">{e.summary}</p>
-            {e.example && <div className="mt-2"><Code>{e.example}</Code></div>}
-          </Card>
-        ))}
-      </div>
+      {GROUPS.map((g) => (
+        <div key={g.id} className="mb-6">
+          <h3 className="font-medium text-zinc-200">{g.title}</h3>
+          <p className="mb-2 text-sm text-zinc-500">{g.blurb}</p>
+          <div className="space-y-2">
+            {ENDPOINTS.filter((e) => endpointGroup(e) === g.id).map((e) => (
+              <Card key={e.method + e.path} className="p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={e.method === 'GET' ? 'sky' : 'amber'}>{e.method}</Badge>
+                  <code className="break-all text-sm text-zinc-100">{e.path}</code>
+                  <span className="ml-auto text-xs text-zinc-500">{e.role}</span>
+                </div>
+                <p className="mt-2 text-sm text-zinc-400">{e.summary}</p>
+                {e.example && <div className="mt-2"><Code>{e.example}</Code></div>}
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
 
       <Card className="mt-4 space-y-3 p-4 text-sm text-zinc-400">
         <div className="font-medium text-zinc-200">Good to know</div>
         <ul className="list-disc space-y-1.5 pl-5">
-          <li><b className="text-zinc-300">Roles.</b> A <i>viewer</i> token sees status, names and expiry dates. A <i>contributor</i> token can also read secret values. Tokens are never admin or owner, and can’t change anything.</li>
+          <li><b className="text-zinc-300">Roles.</b> An <i>API token</i> is a viewer (status, names and expiry dates) or a contributor (can also read secret values). A <i>deploy token</i> can only read one environment’s secrets through <code>/api/v1/env</code> and is refused everywhere else. No token is ever admin or owner, and none can change anything.</li>
           <li><b className="text-zinc-300">Rate limit.</b> 300 requests per minute per token. Above that you get <code>429</code> with a <code>Retry-After</code> header. Status data refreshes every minute or so, so polling more often is pointless.</li>
           <li><b className="text-zinc-300">Errors.</b> JSON like <code>{`{ "error": "…" }`}</code>. <code>401</code> missing, wrong, expired or revoked token (20 wrong tokens from one address lock it out for 15 minutes) · <code>403</code> not allowed for this role, or Rexus is in lockdown · <code>404</code> unknown project or secret.</li>
           <li><b className="text-zinc-300">Never returned.</b> Job URLs, headers and bodies, credentials in monitored URLs, notes and custom fields (viewer tokens), and secret values (except the reveal call).</li>

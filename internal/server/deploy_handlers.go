@@ -36,7 +36,7 @@ func (s *Server) handleListDeployTokens(w http.ResponseWriter, r *http.Request, 
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens, "max": maxDeployTokens})
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens, "max": maxDeployTokens, "url": s.cfg.BaseURL})
 }
 
 // handleCreateDeployToken makes a token that can read one project + environment

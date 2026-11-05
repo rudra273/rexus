@@ -84,6 +84,18 @@ func (s *Server) authed(h authHandler) http.HandlerFunc {
 		if time.Since(a.sess.LastSeenAt) > touchThreshold {
 			s.store.TouchSession(r.Context(), a.sess.ID, time.Now().Add(sessionTTL))
 		}
+		// Only the owner sees the owner's email; for everyone else it is masked.
+		if a.user.Role != "owner" {
+			owner, err := s.store.Owner(r.Context())
+			if err != nil {
+				s.internalError(w, r, err)
+				return
+			}
+			mw := newMaskWriter(w, owner.Email)
+			h(mw, r, a)
+			mw.Flush()
+			return
+		}
 		h(w, r, a)
 	})
 }

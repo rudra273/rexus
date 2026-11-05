@@ -5,14 +5,31 @@ import { useEnvironments } from './services'
 
 const STATUS_TONE = { active: 'green', expired: 'amber', revoked: 'zinc' } as const
 
-/** Where a deploy token can read from, e.g. “prod · backend”. */
-function ScopeLabel({ t }: { t: ApiToken }) {
+/** Active tokens show by default; revoked and expired ones live behind a History button. */
+export function useTokenHistory<T extends { status: string }>(tokens: T[] | null) {
+  const [shown, setShown] = useState(false)
+  const past = tokens?.filter((t) => t.status !== 'active').length ?? 0
+  const visible = tokens ? (shown ? tokens : tokens.filter((t) => t.status === 'active')) : null
+  return { visible, past, shown, toggle: () => setShown((v) => !v) }
+}
+
+export function HistoryButton({ past, shown, onToggle }: { past: number; shown: boolean; onToggle: () => void }) {
+  if (past === 0) return null
   return (
-    <span className="mono text-xs text-zinc-300">
-      {t.environment}
-      <span className="text-zinc-600"> · </span>
-      {t.service ?? <span className="text-zinc-500">project itself</span>}
-    </span>
+    <Button variant="ghost" onClick={onToggle}>
+      {shown ? 'Hide history' : `History (${past})`}
+    </Button>
+  )
+}
+
+/** Where a deploy token can read from, on one line: [project] environment service. */
+function ScopeLabel({ t, showProject }: { t: ApiToken; showProject: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {showProject && <span className="mono text-xs text-zinc-100">{t.project}</span>}
+      <Badge>{t.environment}</Badge>
+      {t.service ? <Badge tone="sky">{t.service}</Badge> : <span className="text-xs text-zinc-500">project itself</span>}
+    </div>
   )
 }
 
@@ -21,11 +38,13 @@ export function DeployTokenTable({
   showProject,
   canRevoke,
   onRevoke,
+  onConnect,
 }: {
   tokens: ApiToken[]
   showProject: boolean
   canRevoke: boolean
   onRevoke: (t: ApiToken) => void
+  onConnect: (t: ApiToken) => void
 }) {
   return (
     <Card className="overflow-x-auto">
@@ -51,8 +70,7 @@ export function DeployTokenTable({
                 </div>
               </td>
               <td className="px-4 py-2.5">
-                {showProject && <div className="mono text-xs text-zinc-100">{t.project}</div>}
-                <ScopeLabel t={t} />
+                <ScopeLabel t={t} showProject={showProject} />
               </td>
               <td className="px-4 py-2.5 text-zinc-400" title={fmtTime(t.last_used_at)}>
                 {t.last_used_at ? (
@@ -66,7 +84,10 @@ export function DeployTokenTable({
               </td>
               <td className="px-4 py-2.5 text-zinc-400">{t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'never'}</td>
               <td className="px-4 py-2.5"><Badge tone={STATUS_TONE[t.status]}>{t.status}</Badge></td>
-              <td className="px-4 py-2.5 text-right">
+              <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                {t.status === 'active' && (
+                  <button className="mr-3 text-xs text-zinc-400 hover:text-emerald-400" onClick={() => onConnect(t)}>Connect</button>
+                )}
                 {canRevoke && t.status === 'active' && (
                   <button className="text-xs text-zinc-400 hover:text-red-400" onClick={() => onRevoke(t)}>Revoke</button>
                 )}
@@ -83,13 +104,15 @@ export function DeployTokenTable({
 export function useDeployTokens(projectKey?: string) {
   const [tokens, setTokens] = useState<ApiToken[] | null>(null)
   const [max, setMax] = useState(100)
+  const [url, setUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
   const load = useCallback(() => {
     const q = projectKey ? `?project=${encodeURIComponent(projectKey)}` : ''
-    api<{ tokens: ApiToken[]; max: number }>(`/api/deploy-tokens${q}`)
+    api<{ tokens: ApiToken[]; max: number; url: string }>(`/api/deploy-tokens${q}`)
       .then((r) => {
         setTokens(r.tokens)
         setMax(r.max)
+        setUrl(r.url)
       })
       .catch((e) => setError(e.message))
   }, [projectKey])
@@ -109,35 +132,42 @@ export function useDeployTokens(projectKey?: string) {
       setError((e as Error).message)
     }
   }
-  return { tokens, max, error, reload: load, revoke }
+  return { tokens, max, url, error, reload: load, revoke }
 }
 
 /** The "Deploy tokens" section of a project page. */
 export function ProjectDeployTokens({ project, services, writable }: { project: Project; services: Service[]; writable: boolean }) {
-  const { tokens, max, error, reload, revoke } = useDeployTokens(project.key)
+  const { tokens, max, url, error, reload, revoke } = useDeployTokens(project.key)
+  const [connecting, setConnecting] = useState<ApiToken | null>(null)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<{ token: string; meta: ApiToken; url: string } | null>(null)
   const active = tokens?.filter((t) => t.status === 'active').length ?? 0
+  const history = useTokenHistory(tokens)
 
   return (
     <section className="mt-8">
       <div className="mb-1 flex items-center justify-between">
         <h2 className="font-medium text-zinc-200">Deploy tokens</h2>
-        {writable && (
-          <Button variant="secondary" onClick={() => setCreating(true)} disabled={active >= max}>Create deploy token</Button>
-        )}
+        <div className="flex items-center gap-2">
+          <HistoryButton past={history.past} shown={history.shown} onToggle={history.toggle} />
+          {writable && (
+            <Button variant="secondary" onClick={() => setCreating(true)} disabled={active >= max}>Create deploy token</Button>
+          )}
+        </div>
       </div>
       <p className="mb-3 max-w-3xl text-sm text-zinc-500">
         Lets one app load its environment variables from this project when it starts. A token reads one environment
         (and optionally one service) — nothing else.
       </p>
       <ErrorBox error={error} />
-      {!tokens ? (
+      {!history.visible ? (
         <Spinner />
-      ) : tokens.length === 0 ? (
-        <Empty title="No deploy tokens">Create one for each app you deploy, then fetch its env at startup.</Empty>
+      ) : history.visible.length === 0 ? (
+        <Empty title={tokens && tokens.length > 0 ? 'No active deploy tokens' : 'No deploy tokens'}>
+          {tokens && tokens.length > 0 ? 'Revoked and expired tokens are under History.' : 'Create one for each app you deploy, then fetch its env at startup.'}
+        </Empty>
       ) : (
-        <DeployTokenTable tokens={tokens} showProject={false} canRevoke={writable} onRevoke={revoke} />
+        <DeployTokenTable tokens={history.visible} showProject={false} canRevoke={writable} onRevoke={revoke} onConnect={setConnecting} />
       )}
 
       {creating && (
@@ -152,7 +182,8 @@ export function ProjectDeployTokens({ project, services, writable }: { project: 
           }}
         />
       )}
-      {created && <DeployTokenShownModal {...created} onClose={() => setCreated(null)} />}
+      {created && <ConnectModal {...created} onClose={() => setCreated(null)} />}
+      {connecting && <ConnectModal meta={connecting} url={url} onClose={() => setConnecting(null)} />}
     </section>
   )
 }
@@ -327,7 +358,12 @@ What to do:
 6. Change nothing else. When done, list the environment variables I must set in my deployment platform.`
 }
 
-function DeployTokenShownModal({ token, meta, url, onClose }: { token: string; meta: ApiToken; url: string; onClose: () => void }) {
+/**
+ * The connection info for a deploy token: the two variables, plus Node.js / Python / Shell / AI-prompt
+ * snippets. Right after creation `token` is set; later (the Connect button) it isn't, and a placeholder
+ * stands in — a token can only be shown once.
+ */
+function ConnectModal({ token, meta, url, onClose }: { token?: string; meta: ApiToken; url: string; onClose: () => void }) {
   const [tab, setTab] = useState<ConnectTab>('node')
   const body: Record<ConnectTab, { label: string; text: string; note: string }> = {
     node: { label: 'Add this file, and call it once before your app starts', text: NODE_SNIPPET, note: 'Fetch at startup, not during the build — build-time values can end up inside your image or frontend bundle.' },
@@ -341,12 +377,22 @@ function DeployTokenShownModal({ token, meta, url, onClose }: { token: string; m
   }
   const cur = body[tab]
   return (
-    <Modal title={`Deploy token “${meta.name}” created`} onClose={onClose} wide>
+    <Modal title={token ? `Deploy token “${meta.name}” created` : `Connect “${meta.name}”`} onClose={onClose} wide>
       <div className="space-y-4">
-        <div className="rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
-          Copy it now — <b>it won’t be shown again.</b> If you lose it, revoke it and create a new one.
-        </div>
-        <CopyBlock label="1. Set these two variables in your deployment platform" text={`REXUS_URL=${url}\nREXUS_TOKEN=${token}`} />
+        {token ? (
+          <div className="rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
+            Copy it now — <b>it won’t be shown again.</b> If you lose it, revoke it and create a new one.
+          </div>
+        ) : (
+          <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-400">
+            Reads <span className="mono text-zinc-200">{[meta.project, meta.environment, meta.service].filter(Boolean).join(' / ')}</span>.
+            The token itself was shown only once, when it was created. If you no longer have it, revoke this token and create a new one.
+          </div>
+        )}
+        <CopyBlock
+          label="1. Set these two variables in your deployment platform"
+          text={`REXUS_URL=${url}\nREXUS_TOKEN=${token ?? 'rxt_… (the token you copied when you created it)'}`}
+        />
         <div>
           <div className="mb-2 text-xs text-zinc-500">2. Connect your app</div>
           <div className="mb-3 flex flex-wrap gap-1.5">
@@ -375,21 +421,29 @@ function DeployTokenShownModal({ token, meta, url, onClose }: { token: string; m
 
 /** The deploy-token overview on the API page (all projects). */
 export function DeployTokensOverview({ canRevoke }: { canRevoke: boolean }) {
-  const { tokens, error, revoke } = useDeployTokens()
+  const { tokens, url, error, revoke } = useDeployTokens()
+  const [connecting, setConnecting] = useState<ApiToken | null>(null)
+  const history = useTokenHistory(tokens)
   return (
     <section className="mt-10">
-      <h2 className="mb-1 font-medium text-zinc-200">Deploy tokens</h2>
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="font-medium text-zinc-200">Deploy tokens</h2>
+        <HistoryButton past={history.past} shown={history.shown} onToggle={history.toggle} />
+      </div>
       <p className="mb-3 max-w-3xl text-sm text-zinc-500">
         Per-app tokens that load a project's environment variables at startup. Create them on the project's page; revoke any here.
       </p>
       <ErrorBox error={error} />
-      {!tokens ? (
+      {!history.visible ? (
         <Spinner />
-      ) : tokens.length === 0 ? (
-        <Empty title="No deploy tokens yet">Open a project and create one under “Deploy tokens”.</Empty>
+      ) : history.visible.length === 0 ? (
+        <Empty title={tokens && tokens.length > 0 ? 'No active deploy tokens' : 'No deploy tokens yet'}>
+          {tokens && tokens.length > 0 ? 'Revoked and expired tokens are under History.' : 'Open a project and create one under “Deploy tokens”.'}
+        </Empty>
       ) : (
-        <DeployTokenTable tokens={tokens} showProject canRevoke={canRevoke} onRevoke={revoke} />
+        <DeployTokenTable tokens={history.visible} showProject canRevoke={canRevoke} onRevoke={revoke} onConnect={setConnecting} />
       )}
+      {connecting && <ConnectModal meta={connecting} url={url} onClose={() => setConnecting(null)} />}
     </section>
   )
 }

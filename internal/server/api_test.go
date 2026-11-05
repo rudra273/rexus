@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +201,44 @@ func TestRenderDotenv(t *testing.T) {
 	}
 	if renderDotenv(map[string]string{}) != "" {
 		t.Fatal("an empty scope must produce an empty file")
+	}
+}
+
+func TestMaskEmail(t *testing.T) {
+	for in, want := range map[string]string{
+		"rudra@gmail.com":       "r***@gmail.com",
+		"Owner.Name@acme.co.uk": "O***@acme.co.uk",
+		"x@y.io":                "x***@y.io",
+		"broken":                "***",
+		"":                      "***",
+	} {
+		if got := maskEmail(in); got != want {
+			t.Errorf("maskEmail(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMaskWriter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mw := newMaskWriter(rec, "Rudra@Gmail.com")
+	mw.Header().Set("Content-Type", "application/json")
+	mw.WriteHeader(http.StatusCreated)
+	mw.Write([]byte(`{"created_by":"rudra@gmail.com","note":"ask RUDRA@gmail.com or bob@gmail.com"}`))
+	mw.Flush()
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, want 201", rec.Code)
+	}
+	want := `{"created_by":"R***@Gmail.com","note":"ask R***@Gmail.com or bob@gmail.com"}`
+	if rec.Body.String() != want {
+		t.Fatalf("body %q, want %q", rec.Body.String(), want)
+	}
+	if rec.Header().Get("Content-Type") != "application/json" || rec.Header().Get("Content-Length") != strconv.Itoa(len(want)) {
+		t.Fatalf("headers not preserved/updated: %v", rec.Header())
+	}
+	// A handler that never writes still answers 200.
+	rec = httptest.NewRecorder()
+	newMaskWriter(rec, "a@b.co").Flush()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty response status %d", rec.Code)
 	}
 }
