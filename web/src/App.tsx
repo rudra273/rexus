@@ -5,6 +5,7 @@ import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from '
 import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
+import { VaultPage } from './pages/vault'
 import { cx, Spinner } from './ui'
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="/jobs/:id/edit" element={<JobFormPage />} />
           </>
         )}
+        {meta.modules.vault && <Route path="/vault" element={<VaultPage />} />}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
@@ -58,6 +60,7 @@ function Layout() {
   const { meta, user, setSession } = useAuth()
   const nav = [
     { to: '/', label: 'Dashboard', end: true },
+    ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', end: false }] : []),
     ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Jobs', end: false }] : []),
     { to: '/settings', label: 'Settings', end: false },
   ]

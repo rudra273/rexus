@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 1** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history. See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 2** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, and the encrypted **Vault** (environments, secret versions, expiry). See [plan.md](plan.md) for the full roadmap.
 
 ## Quick start (Docker)
 
@@ -34,6 +34,20 @@ Enter the code on the setup screen to create the owner account, then set up 2FA.
 docker compose -f docker-compose.external-db.yml up -d --build
 ```
 
+## Accessing the UI
+
+| From | How |
+|---|---|
+| **The same computer** | Open `REXUS_BASE_URL` — `http://localhost:8080` by default. |
+| **Another device on your Wi-Fi/office network** | Open `http://<computer-ip>:<port>` (e.g. `http://192.168.0.10:8080`) and set `REXUS_BASE_URL` to that address. This is plain HTTP, so use it only on networks you trust. |
+| **From anywhere, while your computer is on** | Use a tunnel (below). Nothing needs to be exposed on your router. |
+
+**Tailscale (private — only your team's devices).** Install Tailscale on the Rexus machine and on each device, then open `http://<machine-name>:8080`. For HTTPS inside your tailnet: `tailscale serve --bg 8080`.
+
+**Cloudflare Tunnel (public URL, login still required).** Quick test: `cloudflared tunnel --url http://localhost:8080` prints a temporary `https://….trycloudflare.com` address. For a permanent address, create a named tunnel on your own domain. Then set `REXUS_BASE_URL` to the `https://` address (this turns on secure cookies) and restart Rexus.
+
+By default Docker publishes the port on all network interfaces. To keep Rexus reachable only from the same computer (e.g. when using a tunnel), change the port line in `docker-compose.yml` to `"127.0.0.1:${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"`.
+
 ## CLI
 
 The same binary is the CLI. With Docker, prefix commands with `docker compose exec rexus`.
@@ -52,7 +66,7 @@ Whoever can run commands on the server can recover the owner — no secret owner
 
 Everything is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error. Toggles are shown read-only in **Settings**.
 
-**Keep `REXUS_MASTER_KEY` safe and separate from backups.** It encrypts 2FA secrets, job headers (e.g. API keys) and, from Phase 2, vault secrets.
+**Keep `REXUS_MASTER_KEY` safe and separate from backups.** It encrypts 2FA secrets, job headers (e.g. API keys) and every vault secret. Each secret version gets its own random data key, which is encrypted with the master key — the master key is never stored in the database, so a stolen database can't be decrypted. **If you lose the master key, the vault can't be recovered.**
 
 ## Development
 
@@ -76,7 +90,7 @@ For `make dev-web`, set `REXUS_PORT=8080` or change the proxy target in `web/vit
 ```
 cmd/rexus/            entry point: serve + CLI
 internal/config/      env config + toggles
-internal/crypto/      AES-256-GCM with the master key, tokens
+internal/crypto/      AES-256-GCM, envelope encryption for the vault, tokens
 internal/auth/        Argon2id passwords, TOTP, rate limiting
 internal/db/          Postgres pool + embedded SQL migrations
 internal/store/       all queries

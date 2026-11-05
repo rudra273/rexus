@@ -134,6 +134,22 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/schedule/preview", s.authed(s.handleSchedulePreview))
 	}
 
+	if s.cfg.ModuleVault {
+		mux.HandleFunc("GET /api/projects/{key}/environments", s.authed(s.handleListEnvironments))
+		mux.HandleFunc("POST /api/projects/{key}/environments", s.authed(s.handleCreateEnvironment))
+		mux.HandleFunc("PATCH /api/environments/{id}", s.authed(s.handleRenameEnvironment))
+		mux.HandleFunc("DELETE /api/environments/{id}", s.authed(s.handleDeleteEnvironment))
+		mux.HandleFunc("POST /api/environments/{id}/secrets", s.authed(s.handleCreateSecret))
+
+		mux.HandleFunc("GET /api/secrets", s.authed(s.handleListSecrets))
+		mux.HandleFunc("GET /api/secrets/{id}", s.authed(s.handleGetSecret))
+		mux.HandleFunc("PATCH /api/secrets/{id}", s.authed(s.handleUpdateSecret))
+		mux.HandleFunc("DELETE /api/secrets/{id}", s.authed(s.handleDeleteSecret))
+		mux.HandleFunc("POST /api/secrets/{id}/reveal", s.authed(s.handleRevealSecret))
+		mux.HandleFunc("GET /api/secrets/{id}/versions", s.authed(s.handleListVersions))
+		mux.HandleFunc("POST /api/secrets/{id}/restore", s.authed(s.handleRestoreSecret))
+	}
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})

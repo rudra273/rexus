@@ -16,8 +16,8 @@ import (
 
 const keyVersion byte = 1
 
-// Keyring encrypts small values (TOTP secrets, job headers) with the master key.
-// Phase 2 (vault) adds per-secret data keys wrapped by this same master key.
+// Keyring encrypts small values (TOTP secrets, job headers) directly with the
+// master key. Vault secrets use envelope encryption on top of it (see Seal/Open).
 type Keyring struct {
 	aead cipher.AEAD
 }

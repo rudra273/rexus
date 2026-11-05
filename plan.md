@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phase 1 built** — next is Phase 2 (Vault). See §13.
+Status: **Phases 1–2 built** — next is Phase 3 (Team: invites, roles, audit log page). See §13.
 
 ---
 
@@ -455,7 +455,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** `docker compose up` → create owner → add project → add a keepalive job for Supabase → see it run on schedule and survive a restart.
 
-### Phase 2 — Vault
+### Phase 2 — Vault ✅ built
+> Built Nov 2026. Notes: every secret *version* gets its own data key, wrapped by the master key, and is bound to its secret ID + version so rows can't be swapped; viewers see names, expiry and tags only (notes, custom fields, history and values are hidden); reveal and copy are audit-logged; an environment can only be deleted when empty; expiring keys show on the dashboard and Vault page (alert messages arrive in Phase 5).
 - Master-key envelope encryption (§6).
 - Environments per project (dev / staging / prod + custom).
 - Secrets: name, value, expiry, notes, tags, custom fields.

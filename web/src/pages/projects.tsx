@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, canWrite, type Job, type Project } from '../api'
+import { api, canWrite, type Job, type Project, type Secret } from '../api'
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo } from '../ui'
 import { JobTable } from './jobs'
+import { ExpiryBadge, ProjectVault } from './vault'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -21,6 +22,7 @@ export function DashboardPage() {
   const { user, meta } = useAuth()
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
+  const [expiring, setExpiring] = useState<Secret[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -29,6 +31,9 @@ export function DashboardPage() {
       .catch((e) => setError(e.message))
     if (meta?.modules.scheduler) {
       api<{ jobs: Job[] }>('/api/jobs').then((r) => setJobs(r.jobs)).catch(() => {})
+    }
+    if (meta?.modules.vault) {
+      api<{ secrets: Secret[] }>('/api/secrets?expiring=30').then((r) => setExpiring(r.secrets)).catch(() => {})
     }
   }, [meta])
 
@@ -46,12 +51,39 @@ export function DashboardPage() {
         actions={user && canWrite(user.role) && <Link to="/projects/new"><Button>New project</Button></Link>}
       />
 
-      {meta?.modules.scheduler && (
-        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Stat label="Active jobs" value={enabled.length} />
-          <Stat label="Failing jobs" value={failing.length} tone={failing.length ? 'red' : undefined} />
-          <Stat label="Paused jobs" value={jobs.length - enabled.length} />
+      {(meta?.modules.scheduler || meta?.modules.vault) && (
+        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {meta?.modules.scheduler && (
+            <>
+              <Stat label="Active jobs" value={enabled.length} />
+              <Stat label="Failing jobs" value={failing.length} tone={failing.length ? 'red' : undefined} />
+              <Stat label="Paused jobs" value={jobs.length - enabled.length} />
+            </>
+          )}
+          {meta?.modules.vault && <Stat label="Keys expiring (30 days)" value={expiring.length} tone={expiring.length ? 'red' : undefined} />}
         </div>
+      )}
+
+      {expiring.length > 0 && (
+        <Card className="mb-6 overflow-hidden">
+          <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Keys expiring soon</div>
+          <ul className="divide-y divide-zinc-800/70">
+            {expiring.slice(0, 8).map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
+                <span className="min-w-0 truncate">
+                  <Link to={`/projects/${s.project_key}`} className="text-zinc-100 hover:underline mono">{s.name}</Link>
+                  <span className="ml-2 text-zinc-500">{s.project_name} · {s.environment}</span>
+                </span>
+                <ExpiryBadge secret={s} />
+              </li>
+            ))}
+          </ul>
+          {expiring.length > 8 && (
+            <Link to="/vault" className="block border-t border-zinc-800 px-4 py-2 text-xs text-emerald-400 hover:text-emerald-300">
+              View all {expiring.length} in the Vault →
+            </Link>
+          )}
+        </Card>
       )}
 
       {projects.length === 0 ? (
@@ -190,7 +222,7 @@ export function ProjectDetailPage() {
   if (!project) return <Spinner />
 
   const remove = async () => {
-    if (!confirm(`Delete project "${project.name}" and all its jobs? This cannot be undone.`)) return
+    if (!confirm(`Delete project "${project.name}" with all its jobs and secrets? This cannot be undone.`)) return
     try {
       await api(`/api/projects/${project.key}`, { method: 'DELETE' })
       navigate('/')
@@ -227,8 +259,10 @@ export function ProjectDetailPage() {
         project.description && <p className="mb-6 max-w-3xl whitespace-pre-wrap text-sm text-zinc-400">{project.description}</p>
       )}
 
+      {meta?.modules.vault && <ProjectVault project={project} />}
+
       {meta?.modules.scheduler && (
-        <section className="mt-6">
+        <section className="mt-8">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-medium text-zinc-200">Jobs</h2>
             {writable && (

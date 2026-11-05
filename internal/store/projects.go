@@ -69,13 +69,27 @@ func (s *Store) ProjectByKey(ctx context.Context, key string) (*Project, error) 
 }
 
 func (s *Store) CreateProject(ctx context.Context, key, name, description, createdBy string) (*Project, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	var id string
-	err := s.Pool.QueryRow(ctx, `INSERT INTO projects (key, name, description, created_by)
+	err = tx.QueryRow(ctx, `INSERT INTO projects (key, name, description, created_by)
 		VALUES ($1, $2, $3, $4) RETURNING id`, key, name, description, createdBy).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
 		}
+		return nil, err
+	}
+	// Every project starts with dev / staging / prod (more can be added).
+	if _, err := tx.Exec(ctx, `INSERT INTO environments (project_id, name, position)
+		VALUES ($1, 'dev', 0), ($1, 'staging', 1), ($1, 'prod', 2)`, id); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.ProjectByKey(ctx, key)

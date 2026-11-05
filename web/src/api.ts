@@ -108,5 +108,38 @@ export interface JobRun {
   finished_at: string | null
 }
 
-export const canWrite = (role: Role) => role === 'owner' || role === 'admin' || role === 'contributor'
+export interface Environment {
+  id: string
+  project_id: string
+  name: string
+  secret_count: number
+  created_at: string
+}
+
+export interface Secret {
+  id: string
+  environment_id: string
+  environment: string
+  project_key: string
+  project_name: string
+  name: string
+  expires_on: string | null
+  days_left: number | null
+  notes: string
+  tags: string[]
+  custom_fields: Record<string, string>
+  current_version: number
+  created_at: string
+  updated_at: string
+  updated_by: string | null
+}
+
+export interface SecretVersion {
+  version: number
+  created_by: string | null
+  created_at: string
+  current: boolean
+}
+
+export const canWrite =(role: Role) => role === 'owner' || role === 'admin' || role === 'contributor'
 export const isAdmin = (role: Role) => role === 'owner' || role === 'admin'
