@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, type ApiToken, type Project, type Service } from '../api'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, Select, Spinner, cx, fmtTime, timeAgo } from '../ui'
-import { useEnvironments } from './services'
+import { useEnvironments, useServices } from './services'
 
 const STATUS_TONE = { active: 'green', expired: 'amber', revoked: 'zinc' } as const
 
@@ -183,6 +183,17 @@ export function ProjectDeployTokens({ project, services, writable }: { project: 
         />
       )}
       {created && <ConnectModal {...created} onClose={() => setCreated(null)} />}
+      {creating && (
+        <CreateDeployTokenModal
+          onClose={() => setCreating(false)}
+          onCreated={(r) => {
+            setCreating(false)
+            setCreated(r)
+            reload()
+          }}
+        />
+      )}
+      {created && <ConnectModal {...created} onClose={() => setCreated(null)} />}
       {connecting && <ConnectModal meta={connecting} url={url} onClose={() => setConnecting(null)} />}
     </section>
   )
@@ -190,16 +201,28 @@ export function ProjectDeployTokens({ project, services, writable }: { project: 
 
 function CreateDeployTokenModal({
   project,
-  services,
+  services: fixedServices,
   onClose,
   onCreated,
 }: {
-  project: Project
-  services: Service[]
+  /** Opened from a project's page: the project is fixed. Without it (API page) the user picks one. */
+  project?: Project
+  services?: Service[]
   onClose: () => void
   onCreated: (r: { token: string; meta: ApiToken; url: string }) => void
 }) {
-  const envs = useEnvironments(project.key)
+  const [projects, setProjects] = useState<Project[] | null>(null)
+  const [picked, setPicked] = useState('')
+  useEffect(() => {
+    if (project) return
+    api<{ projects: Project[] }>('/api/projects')
+      .then((r) => setProjects(r.projects))
+      .catch(() => setProjects([]))
+  }, [project])
+  const projectKey = project?.key ?? picked
+  const envs = useEnvironments(projectKey || null)
+  const loaded = useServices(project ? null : projectKey || null).services
+  const services = project ? (fixedServices ?? []) : (loaded ?? [])
   const [name, setName] = useState('')
   const [environment, setEnvironment] = useState('')
   const [service, setService] = useState('')
@@ -216,7 +239,7 @@ function CreateDeployTokenModal({
     try {
       const r = await api<{ token: string; meta: ApiToken; url: string }>('/api/deploy-tokens', {
         method: 'POST',
-        body: { name, project: project.key, environment: env, service, expires_in_days: expiry === 'never' ? null : Number(expiry) },
+        body: { name, project: projectKey, environment: env, service, expires_in_days: expiry === 'never' ? null : Number(expiry) },
       })
       onCreated(r)
     } catch (err) {
@@ -227,10 +250,29 @@ function CreateDeployTokenModal({
   }
 
   return (
-    <Modal title={`Create deploy token — ${project.name}`} onClose={onClose}>
+    <Modal title={project ? `Create deploy token — ${project.name}` : 'Create deploy token'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
+        {!project && (
+          <Field label="Project" hint="The app's project. The token can read only this project.">
+            <Select
+              value={picked}
+              onChange={(e) => {
+                setPicked(e.target.value)
+                setEnvironment('')
+                setService('')
+              }}
+              autoFocus
+              required
+            >
+              <option value="">{projects ? 'Choose a project…' : 'Loading…'}</option>
+              {(projects ?? []).map((p) => (
+                <option key={p.id} value={p.key}>{p.name} ({p.key})</option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Name" hint="Which app uses it — e.g. “vidyakalp-prod-backend”. Shown in the audit log.">
-          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus={!!project} required />
         </Field>
         <Field label="Environment" hint="The token reads only this environment's secrets.">
           <Select value={env} onChange={(e) => setEnvironment(e.target.value)} required>
@@ -259,7 +301,7 @@ function CreateDeployTokenModal({
         <p className="text-xs text-zinc-500">It can only read secret values in that scope. It can't see anything else in Rexus.</p>
         <ErrorBox error={error} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={busy || !env}>{busy ? 'Creating…' : 'Create token'}</Button>
+          <Button type="submit" disabled={busy || !env || !projectKey}>{busy ? 'Creating…' : 'Create token'}</Button>
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
         </div>
       </form>
@@ -421,28 +463,47 @@ function ConnectModal({ token, meta, url, onClose }: { token?: string; meta: Api
 
 /** The deploy-token overview on the API page (all projects). */
 export function DeployTokensOverview({ canRevoke }: { canRevoke: boolean }) {
-  const { tokens, url, error, revoke } = useDeployTokens()
+  const { tokens, max, url, error, reload, revoke } = useDeployTokens()
   const [connecting, setConnecting] = useState<ApiToken | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [created, setCreated] = useState<{ token: string; meta: ApiToken; url: string } | null>(null)
   const history = useTokenHistory(tokens)
+  const active = tokens?.filter((t) => t.status === 'active').length ?? 0
   return (
     <section className="mt-10">
       <div className="mb-1 flex items-center justify-between">
         <h2 className="font-medium text-zinc-200">Deploy tokens</h2>
-        <HistoryButton past={history.past} shown={history.shown} onToggle={history.toggle} />
+        <div className="flex items-center gap-2">
+          <HistoryButton past={history.past} shown={history.shown} onToggle={history.toggle} />
+          {canRevoke && (
+            <Button variant="secondary" onClick={() => setCreating(true)} disabled={active >= max}>Create deploy token</Button>
+          )}
+        </div>
       </div>
       <p className="mb-3 max-w-3xl text-sm text-zinc-500">
-        Per-app tokens that load a project's environment variables at startup. Create them on the project's page; revoke any here.
+        Per-app tokens that load one project's environment variables at startup. You can also create them on a project's page.
       </p>
       <ErrorBox error={error} />
       {!history.visible ? (
         <Spinner />
       ) : history.visible.length === 0 ? (
         <Empty title={tokens && tokens.length > 0 ? 'No active deploy tokens' : 'No deploy tokens yet'}>
-          {tokens && tokens.length > 0 ? 'Revoked and expired tokens are under History.' : 'Open a project and create one under “Deploy tokens”.'}
+          {tokens && tokens.length > 0 ? 'Revoked and expired tokens are under History.' : 'Create one with the button above, then fetch its env at startup.'}
         </Empty>
       ) : (
         <DeployTokenTable tokens={history.visible} showProject canRevoke={canRevoke} onRevoke={revoke} onConnect={setConnecting} />
       )}
+      {creating && (
+        <CreateDeployTokenModal
+          onClose={() => setCreating(false)}
+          onCreated={(r) => {
+            setCreating(false)
+            setCreated(r)
+            reload()
+          }}
+        />
+      )}
+      {created && <ConnectModal {...created} onClose={() => setCreated(null)} />}
       {connecting && <ConnectModal meta={connecting} url={url} onClose={() => setConnecting(null)} />}
     </section>
   )
