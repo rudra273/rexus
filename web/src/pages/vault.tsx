@@ -270,16 +270,16 @@ export function SecretRow({ secret, services, showService, showProject, writable
     }
   }
 
-  const ib = 'rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
+  const ib = 'flex rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
   const link = 'text-xs text-zinc-400 hover:text-zinc-100'
   const fields = Object.entries(secret.custom_fields)
 
   return (
-    <Card className={cx('border-l-[3px] p-4', expiryAccent(secret))}>
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+    <Card className={cx('border-l-[3px] px-4 py-2.5', expiryAccent(secret))}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-zinc-100 mono">{secret.name}</span>
+            <span className="text-sm font-medium leading-6 text-zinc-100 mono">{secret.name}</span>
             {showProject && <Link to={`/projects/${secret.project_key}`} className="text-xs text-zinc-400 hover:text-zinc-200 hover:underline">{secret.project_name}</Link>}
             {showService && <ServiceBadge r={secret} />}
             <Badge>{secret.environment}</Badge>
