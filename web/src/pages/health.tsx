@@ -236,7 +236,7 @@ export function CheckDetailPage() {
     return () => clearInterval(t)
   }, [load])
 
-  if (error) return <ErrorBox error={error} />
+  if (error) return <ErrorBox error={error} persistent />
   if (!detail || !series) return <Spinner />
   const { check: c, uptime, events } = detail
 

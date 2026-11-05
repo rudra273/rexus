@@ -68,7 +68,7 @@ export function JobsPage() {
     api<{ jobs: Job[] }>('/api/jobs').then((r) => setJobs(r.jobs)).catch((e) => setError(e.message))
   }, [])
 
-  if (error) return <ErrorBox error={error} />
+  if (error) return <ErrorBox error={error} persistent />
   if (!jobs) return <Spinner />
   return (
     <>
@@ -353,7 +353,7 @@ export function JobDetailPage() {
     return () => clearInterval(t)
   }, [load])
 
-  if (error) return <ErrorBox error={error} />
+  if (error) return <ErrorBox error={error} persistent />
   if (!job) return <Spinner />
 
   const runNow = async () => {

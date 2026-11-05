@@ -4,6 +4,7 @@ import { api, canWrite, isAdmin, type Environment, type Project, type Secret, ty
 import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 import { ServiceBadge, ServiceSelect, serviceQuery, useServices } from './services'
+import { BulkAddModal, ConfirmModal, DeleteAllModal } from './bulk_secrets'
 
 export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'days_left'> }) {
   if (!secret.expires_on || secret.days_left == null) return <span className="text-xs text-zinc-600">no expiry</span>
@@ -25,6 +26,8 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
   const [secrets, setSecrets] = useState<Secret[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<{ existing?: Secret } | null>(null)
+  const [bulk, setBulk] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const [addingEnv, setAddingEnv] = useState(false)
   const [newEnv, setNewEnv] = useState('')
 
@@ -109,7 +112,15 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
     <section className="mt-6">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-medium text-zinc-200">Secrets</h2>
-        {writable && envId && <Button variant="secondary" onClick={() => setForm({})}>Add secret</Button>}
+        {writable && envId && (
+          <div className="flex items-center gap-2">
+            {admin && (secrets?.length ?? 0) > 0 && (
+              <Button variant="ghost" className="text-red-400 hover:!text-red-300" onClick={() => setDeletingAll(true)}>Delete all</Button>
+            )}
+            <Button variant="secondary" onClick={() => setBulk(true)}>Add multiple</Button>
+            <Button variant="secondary" onClick={() => setForm({})}>Add secret</Button>
+          </div>
+        )}
       </div>
       <ErrorBox error={error} />
       {!envs ? (
@@ -176,6 +187,32 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
           onClose={() => setForm(null)}
           onSaved={() => {
             setForm(null)
+            refresh()
+          }}
+        />
+      )}
+      {bulk && envId && active && (
+        <BulkAddModal
+          environments={envs ?? []}
+          initialEnvId={envId}
+          services={services}
+          defaultService={scope && scope !== '-' ? scope : ''}
+          onClose={() => setBulk(false)}
+          onDone={() => {
+            setBulk(false)
+            refresh()
+          }}
+        />
+      )}
+      {deletingAll && envId && active && (
+        <DeleteAllModal
+          choices={[{ id: envId, name: active.name, count: secrets?.length ?? 0 }]}
+          initialEnvId={envId}
+          scope={scope}
+          scopeLabel={scope === '' ? (services.length > 0 ? 'all services and the project itself' : 'the project') : scope === '-' ? 'the project itself' : `service ${services.find((s) => s.id === scope)?.key ?? ''}`}
+          onClose={() => setDeletingAll(false)}
+          onDone={() => {
+            setDeletingAll(false)
             refresh()
           }}
         />
@@ -261,14 +298,11 @@ export function SecretRow({ secret, services, showService, showProject, writable
     }
   }
 
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const remove = async () => {
-    if (!confirm(`Delete "${secret.name}" and all ${secret.current_version} version(s)? This cannot be undone.`)) return
-    try {
-      await api(`/api/secrets/${secret.id}`, { method: 'DELETE' })
-      onChanged()
-    } catch (e) {
-      setErr((e as Error).message)
-    }
+    await api(`/api/secrets/${secret.id}`, { method: 'DELETE' })
+    setConfirmingDelete(false)
+    onChanged()
   }
 
   const ib = 'flex rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
@@ -302,7 +336,7 @@ export function SecretRow({ secret, services, showService, showProject, writable
             <button className={cx(ib, showHistory && 'bg-zinc-800 text-zinc-100')} title={`History · updated ${timeAgo(secret.updated_at)}${secret.updated_by ? ` by ${secret.updated_by}` : ''}`} aria-label="History" onClick={toggleHistory}><Icon name="history" /></button>
             <button className={ib} title="Edit" aria-label="Edit" onClick={onEdit}><Icon name="edit" /></button>
             {(services.length > 0 || secret.service_id) && <button className={ib} title="Move" aria-label="Move" onClick={() => setMoving(true)}><Icon name="move" /></button>}
-            <button className={cx(ib, 'hover:!text-red-400')} title="Delete" aria-label="Delete" onClick={remove}><Icon name="trash" /></button>
+            <button className={cx(ib, 'hover:!text-red-400')} title="Delete" aria-label="Delete" onClick={() => setConfirmingDelete(true)}><Icon name="trash" /></button>
           </div>
         )}
       </div>
@@ -364,6 +398,12 @@ export function SecretRow({ secret, services, showService, showProject, writable
             onChanged()
           }}
         />
+      )}
+      {confirmingDelete && (
+        <ConfirmModal title="Delete secret" confirmLabel="Delete secret" danger onConfirm={remove} onClose={() => setConfirmingDelete(false)}>
+          Delete <span className="mono font-medium text-zinc-100">{secret.name}</span>
+          {secret.current_version > 1 ? ` and its ${secret.current_version} versions` : ''}? This can’t be undone.
+        </ConfirmModal>
       )}
     </Card>
   )
@@ -804,6 +844,29 @@ function AddSecretHere({ projectKey, defaultService, defaultEnv, onClose, onSave
   )
 }
 
+/** "Add multiple" from the global Vault page: loads the project's environments and services, then opens the paste dialog. */
+function BulkAddHere({ projectKey, defaultService, defaultEnv, onClose, onDone }: { projectKey: string; defaultService: string; defaultEnv: string; onClose: () => void; onDone: () => void }) {
+  const { services } = useServices(projectKey)
+  const [envs, setEnvs] = useState<Environment[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    api<{ environments: Environment[] }>(`/api/projects/${encodeURIComponent(projectKey)}/environments`)
+      .then((r) => setEnvs(r.environments))
+      .catch((e) => setError(e.message))
+  }, [projectKey])
+
+  if (envs && envs.length > 0 && services) {
+    const pre = envs.find((e) => e.name === defaultEnv) ?? envs[0]
+    return <BulkAddModal environments={envs} initialEnvId={pre.id} services={services} defaultService={defaultService} onClose={onClose} onDone={onDone} />
+  }
+  return (
+    <Modal title="Add multiple secrets" onClose={onClose}>
+      <ErrorBox error={error} />
+      {!envs ? <Spinner /> : <p className="text-sm text-zinc-400">This project has no environments yet. Add one from the project page first.</p>}
+    </Modal>
+  )
+}
+
 /** ⌘K / Ctrl+K palette: jump straight to any secret. */
 function QuickFind({ secrets, onPick, onClose }: { secrets: Secret[]; onPick: (s: Secret) => void; onClose: () => void }) {
   const [q, setQ] = useState('')
@@ -863,9 +926,12 @@ export function VaultPage() {
   const [reloadKey, setReloadKey] = useState(0)
   const [finding, setFinding] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [bulk, setBulk] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const [editing, setEditing] = useState<Secret | null>(null)
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
+  const admin = !!user && isAdmin(user.role)
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -935,6 +1001,12 @@ export function VaultPage() {
   }
   const folderProject = sel.kind === 'project' || sel.kind === 'service' ? sel.project : null
   const folderServiceId = sel.kind === 'service' ? (tree.find((p) => p.key === sel.project)?.services.get(sel.service)?.id ?? '') : ''
+  // Delete all acts on this folder: the whole project, one service, or the project-level secrets.
+  // (If a service folder's ID can't be found we offer nothing — an empty scope would mean "everything".)
+  const deleteScope = sel.kind === 'service' ? (sel.service === PROJECT_LEVEL ? '-' : folderServiceId) : ''
+  const canDeleteAll = admin && !!folderProject && scoped.length > 0 && (sel.kind !== 'service' || sel.service === PROJECT_LEVEL || folderServiceId !== '')
+  const deleteChoices = [...new Map(scoped.map((s) => [s.environment_id, s.environment])).entries()].map(([id, name]) => ({ id, name, count: scoped.filter((s) => s.environment_id === id).length }))
+  const deleteLabel = sel.kind === 'project' ? 'the whole project, every service' : sel.kind === 'service' ? (sel.service === PROJECT_LEVEL ? 'the project itself' : `service ${sel.service}`) : ''
 
   return (
     <>
@@ -1031,7 +1103,11 @@ export function VaultPage() {
                 <span className="ml-2 text-xs font-normal text-zinc-500">{list.length} secret{list.length === 1 ? '' : 's'}</span>
               </h2>
               {writable && folderProject && (
-                <Button variant="secondary" className="ml-auto py-1 text-xs" onClick={() => setAdding(true)}>+ Add secret here</Button>
+                <div className="ml-auto flex items-center gap-2">
+                  {canDeleteAll && <Button variant="ghost" className="py-1 text-xs text-red-400 hover:!text-red-300" onClick={() => setDeletingAll(true)}>Delete all</Button>}
+                  <Button variant="secondary" className="py-1 text-xs" onClick={() => setBulk(true)}>Add multiple</Button>
+                  <Button variant="secondary" className="py-1 text-xs" onClick={() => setAdding(true)}>+ Add secret here</Button>
+                </div>
               )}
               {envs.length > 1 && (
                 <div className="flex flex-wrap gap-1.5 basis-full">
@@ -1077,6 +1153,31 @@ export function VaultPage() {
         />
       )}
       {finding && <QuickFind secrets={all} onPick={pick} onClose={() => setFinding(false)} />}
+      {bulk && folderProject && (
+        <BulkAddHere
+          projectKey={folderProject}
+          defaultService={folderServiceId}
+          defaultEnv={activeEnv}
+          onClose={() => setBulk(false)}
+          onDone={() => {
+            setBulk(false)
+            setReloadKey((k) => k + 1)
+          }}
+        />
+      )}
+      {deletingAll && canDeleteAll && (
+        <DeleteAllModal
+          choices={deleteChoices}
+          initialEnvId={deleteChoices.find((c) => c.name === activeEnv)?.id ?? ''}
+          scope={deleteScope}
+          scopeLabel={deleteLabel}
+          onClose={() => setDeletingAll(false)}
+          onDone={() => {
+            setDeletingAll(false)
+            setReloadKey((k) => k + 1)
+          }}
+        />
+      )}
       {adding && folderProject && (
         <AddSecretHere
           projectKey={folderProject}

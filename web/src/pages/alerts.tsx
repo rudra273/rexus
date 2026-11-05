@@ -42,7 +42,7 @@ export function AlertsPage() {
     return () => clearInterval(t)
   }, [loadChannels, loadEvents, loadHistory])
 
-  if (error && !data) return <ErrorBox error={error} />
+  if (error && !data) return <ErrorBox error={error} persistent />
   if (!data || !events) return <Spinner />
 
   const activeChannels = data.channels.filter((c) => c.enabled).length

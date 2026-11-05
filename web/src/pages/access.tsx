@@ -127,7 +127,16 @@ interface AccessInfo { owner_only: boolean; can_set_owner_only: boolean; people:
 
 const VIA: Record<Person['via'], string> = { owner: 'owner', all_projects: 'all projects', creator: 'created it', shared: 'shared' }
 
-export function ProjectAccess({ project, onChanged }: { project: Project; onChanged: () => void }) {
+/** The project's Access dialog, opened from the project's ⋯ menu. */
+export function ProjectAccessModal({ project, onClose, onChanged }: { project: Project; onClose: () => void; onChanged: () => void }) {
+  return (
+    <Modal title={`Access — ${project.name}`} onClose={onClose} wide>
+      <ProjectAccess project={project} onChanged={onChanged} />
+    </Modal>
+  )
+}
+
+function ProjectAccess({ project, onChanged }: { project: Project; onChanged: () => void }) {
   const [info, setInfo] = useState<AccessInfo | null>(null)
   const [chosen, setChosen] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -176,12 +185,11 @@ export function ProjectAccess({ project, onChanged }: { project: Project; onChan
   const dirty = JSON.stringify([...chosen].sort()) !== JSON.stringify(info.users.filter((u) => u.shared).map((u) => u.id).sort())
 
   return (
-    <section className="mt-8">
-      <h2 className="mb-1 font-medium text-zinc-200">Access</h2>
-      <p className="mb-3 max-w-3xl text-sm text-zinc-500">Who can see this project. Contributors and viewers only see projects shared with them.</p>
+    <div>
+      <p className="mb-3 text-sm text-zinc-500">Who can see this project. Contributors and viewers only see projects shared with them.</p>
       <ErrorBox error={error} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card className="p-4">
           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">Can see it now</div>
           <ul className="space-y-1.5">
@@ -204,9 +212,8 @@ export function ProjectAccess({ project, onChanged }: { project: Project; onChan
                 <label key={u.id} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-900/60">
                   <input type="checkbox" className="accent-emerald-500" checked={chosen.includes(u.id)}
                     onChange={() => setChosen(chosen.includes(u.id) ? chosen.filter((x) => x !== u.id) : [...chosen, u.id])} />
-                  <span className="text-zinc-100">{u.name || u.email}</span>
-                  <span className="text-xs text-zinc-500">{u.email}</span>
-                  <span className="ml-auto"><Badge tone={u.role === 'admin' ? 'sky' : 'zinc'}>{u.role}</Badge></span>
+                  <span className="min-w-0 truncate"><span className="text-zinc-100">{u.name || u.email}</span> <span className="text-xs text-zinc-500">{u.email}</span></span>
+                  <span className="ml-auto shrink-0"><Badge tone={u.role === 'admin' ? 'sky' : 'zinc'}>{u.role}</Badge></span>
                 </label>
               ))}
             </div>
@@ -224,11 +231,11 @@ export function ProjectAccess({ project, onChanged }: { project: Project; onChan
             <div className="font-medium text-zinc-200">Owner only</div>
             <div className="text-zinc-500">Hide this project from every admin — even ones with access to all projects — unless you share it with them by name.</div>
           </div>
-          <Button variant={info.owner_only ? 'danger' : 'secondary'} onClick={() => setOwnerOnly(!info.owner_only)}>
+          <Button className="shrink-0 whitespace-nowrap" variant={info.owner_only ? 'danger' : 'secondary'} onClick={() => setOwnerOnly(!info.owner_only)}>
             {info.owner_only ? 'Owner only — turn off' : 'Make owner only'}
           </Button>
         </Card>
       )}
-    </section>
+    </div>
   )
 }

@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, canWrite, isAdmin, type HealthCheck, type Job, type Project, type Secret } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo, type DotStatus } from '../ui'
+import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Spinner, StatusDot, Textarea, timeAgo, type DotStatus } from '../ui'
 import { JobTable } from './jobs'
 import { degradedReason, ProjectChecks } from './health'
 import { ExpiryBadge, ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 import { ProjectDeployTokens } from './deploy_tokens'
-import { ProjectAccess } from './access'
+import { ProjectAccessModal } from './access'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -72,7 +72,7 @@ export function DashboardPage() {
     return () => clearInterval(t)
   }, [load])
 
-  if (error) return <ErrorBox error={error} />
+  if (error) return <ErrorBox error={error} persistent />
   if (!projects) return <Spinner />
 
   const active = checks.filter((c) => c.enabled)
@@ -259,6 +259,7 @@ export function ProjectDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  const [accessOpen, setAccessOpen] = useState(false)
   // '' = all services, '-' = the project directly, otherwise a service ID.
   const [scope, setScope] = useState('')
   const writable = !!user && canWrite(user.role)
@@ -287,7 +288,7 @@ export function ProjectDetailPage() {
     load()
   }, [load])
 
-  if (error) return <ErrorBox error={error} />
+  if (error) return <ErrorBox error={error} persistent />
   if (!project || !services) return <Spinner />
 
   const remove = async () => {
@@ -307,10 +308,13 @@ export function ProjectDetailPage() {
         subtitle={<span className="mono">{project.key}{project.owner_only && <span className="ml-2 rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}</span>}
         actions={
           admin && !editing && (
-            <>
-              <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
-              <Button variant="danger" onClick={remove}>Delete</Button>
-            </>
+            <ActionMenu
+              items={[
+                { label: 'Edit project', onClick: () => setEditing(true) },
+                { label: 'Access…', onClick: () => setAccessOpen(true) },
+                { label: 'Delete project', onClick: remove, danger: true },
+              ]}
+            />
           )
         }
       />
@@ -345,7 +349,7 @@ export function ProjectDetailPage() {
 
       {meta?.modules.vault && <ProjectDeployTokens project={project} services={services} writable={writable} />}
 
-      {admin && <ProjectAccess project={project} onChanged={load} />}
+      {accessOpen && <ProjectAccessModal project={project} onClose={() => setAccessOpen(false)} onChanged={load} />}
 
       {meta?.modules.scheduler && (
         <section className="mt-8">

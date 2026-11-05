@@ -96,6 +96,12 @@ The **Dashboard** lists everything that needs attention across all projects — 
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
+## Adding many secrets at once
+
+On a project's page, and on the **Vault** page once you select a project or service folder, **Add multiple** takes a whole `.env` file: paste it or load a file, check the preview, and add them in one go. Comments, `export`, quotes and multi-line values (private keys) work, and a later line with the same name wins. Lines that can't be added (a bad name, an empty value) are marked in the preview and left out. Names that already exist are skipped unless you tick **Overwrite ones that already exist**, which saves a new version only when the value really changed. Choose whether they go to the project itself or to one of its services. Up to 200 at a time, and nothing is written if any name or value is invalid.
+
+**Delete all** (owner and admin) removes every secret in the environment you're looking at — or just those of the service or folder you've selected — with their history. On the Vault page you choose the environment in the dialog. You must type the environment's name to confirm. Both actions are audited with names only, never values. Deleting a single secret asks for a confirmation too.
+
 ## Deploy tokens: apps load their env at startup
 
 A **deploy token** lets one app fetch its own environment variables from the Vault when it starts. Update a secret in Rexus → restart the deployment → the app gets the new value. Rexus is contacted once per start, never per user request; while the app runs, Rexus can be offline.

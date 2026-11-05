@@ -67,7 +67,7 @@ export function UsersPage() {
   }, [load])
 
   if (!me) return null
-  if (error && !users) return <ErrorBox error={error} />
+  if (error && !users) return <ErrorBox error={error} persistent />
   if (!users) return <Spinner />
 
   const act = async (fn: () => Promise<unknown>) => {

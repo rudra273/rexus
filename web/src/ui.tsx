@@ -1,4 +1,4 @@
-import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
@@ -18,6 +18,61 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         </div>
         {children}
       </div>
+    </div>
+  )
+}
+
+/** A "⋯" button that opens a small menu of actions. */
+export function ActionMenu({ items, label = 'More actions' }: { items: { label: string; onClick: () => void; danger?: boolean }[]; label?: string }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) return e.key === 'Escape' && setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', close)
+    }
+  }, [open])
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <circle cx="8" cy="3" r="1.5" />
+          <circle cx="8" cy="8" r="1.5" />
+          <circle cx="8" cy="13" r="1.5" />
+        </svg>
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-40 mt-1.5 w-44 overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                it.onClick()
+              }}
+              className={cx('block w-full px-3.5 py-2 text-left text-sm hover:bg-zinc-800', it.danger ? 'text-red-400' : 'text-zinc-200')}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -87,7 +142,7 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   return <select className={cx(inputCls, className)} {...props} />
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
       <span className="text-sm font-medium text-zinc-300">{label}</span>
@@ -101,9 +156,25 @@ export function Card({ children, className }: { children: ReactNode; className?:
   return <div className={cx('rounded-lg border border-zinc-800 bg-zinc-900/60', className)}>{children}</div>
 }
 
-export function ErrorBox({ error }: { error: string | null }) {
-  if (!error) return null
-  return <div className="rounded-md border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">{error}</div>
+/**
+ * An error message with a ✕ to dismiss it. It comes back if a different error arrives (or the same one
+ * after the error was cleared). `persistent` has no ✕ — for a page that failed to load, where there is
+ * nothing else to show.
+ */
+export function ErrorBox({ error, persistent }: { error: string | null; persistent?: boolean }) {
+  const [hidden, setHidden] = useState<string | null>(null)
+  useEffect(() => {
+    if (!error) setHidden(null)
+  }, [error])
+  if (!error || hidden === error) return null
+  return (
+    <div role="alert" className="flex items-start justify-between gap-3 rounded-md border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
+      <span className="min-w-0 break-words">{error}</span>
+      {!persistent && (
+        <button type="button" onClick={() => setHidden(error)} aria-label="Dismiss" title="Dismiss" className="shrink-0 text-red-400 hover:text-red-100">✕</button>
+      )}
+    </div>
+  )
 }
 
 export function PageHeader({ title, subtitle, actions }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode }) {

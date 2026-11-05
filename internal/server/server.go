@@ -236,6 +236,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("PATCH /api/environments/{id}", s.authed(s.handleRenameEnvironment))
 		mux.HandleFunc("DELETE /api/environments/{id}", s.authed(s.handleDeleteEnvironment))
 		mux.HandleFunc("POST /api/environments/{id}/secrets", s.authed(s.handleCreateSecret))
+		mux.HandleFunc("POST /api/environments/{id}/secrets/bulk", s.authed(s.handleBulkSecrets))
+		mux.HandleFunc("POST /api/environments/{id}/secrets/delete-all", s.authed(s.handleDeleteAllSecrets))
 
 		mux.HandleFunc("GET /api/secrets", s.authed(s.handleListSecrets))
 		mux.HandleFunc("GET /api/secrets/{id}", s.authed(s.handleGetSecret))

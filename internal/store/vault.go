@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -316,6 +317,30 @@ func (s *Store) MoveSecret(ctx context.Context, id string, serviceID *string, us
 		return nil, ErrNotFound
 	}
 	return s.SecretByID(ctx, id)
+}
+
+// DeleteSecretsInScope deletes every secret of an environment within the service scope
+// ("" = all of them, "-" = the project's own, or one service's) with their versions,
+// and returns the names that were deleted.
+func (s *Store) DeleteSecretsInScope(ctx context.Context, environmentID string, f ScopeFilter) ([]string, error) {
+	var b filterBuilder
+	b.add("environment_id = ?", environmentID)
+	b.scope("service_id", f)
+	rows, err := s.Pool.Query(ctx, `DELETE FROM secrets`+b.sql()+` RETURNING name`, b.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names, rows.Err()
 }
 
 func (s *Store) DeleteSecret(ctx context.Context, id string) error {

@@ -188,7 +188,7 @@ export function TwoFactorEnroll({ onDone }: { onDone: (s: SessionResp) => void }
     })
   }
 
-  if (loadError) return <ErrorBox error={loadError} />
+  if (loadError) return <ErrorBox error={loadError} persistent />
   return (
     <div className="space-y-4">
       <ol className="list-decimal space-y-1 pl-5 text-sm text-zinc-400">

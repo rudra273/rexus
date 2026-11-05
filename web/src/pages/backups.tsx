@@ -110,7 +110,7 @@ export function BackupsPage() {
     return () => clearInterval(t)
   }, [load, running])
 
-  if (error && !data) return <ErrorBox error={error} />
+  if (error && !data) return <ErrorBox error={error} persistent />
   if (!data) return <Spinner />
   const { status, backups, intervals, dir_problem } = data
   const label = backupLabel(status)

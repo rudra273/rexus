@@ -44,7 +44,7 @@ export function IntegrationsPage() {
     }
   }
 
-  if (error && !tokens) return <ErrorBox error={error} />
+  if (error && !tokens) return <ErrorBox error={error} persistent />
   if (!tokens) return <Spinner />
   const active = tokens.filter((t) => t.status === 'active').length
 
