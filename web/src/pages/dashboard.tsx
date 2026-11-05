@@ -5,7 +5,7 @@ import { useAuth } from '../auth'
 import { NavIcon } from '../icons'
 import { Badge, Button, Card, Empty, PageHeader, Select, Spinner, StatusDot, WebsiteLink, cx, fmtTime, hostOf, timeAgo } from '../ui'
 import { backupLabel } from './backups'
-import { fmtDuration, Sparkline, UptimeBar, uptimeOf } from './charts'
+import { fmtDuration, responseStats, Sparkline, UptimeBar, uptimeOf } from './charts'
 import { degradedReason, fmtPct, HealthBadge } from './health'
 import { ExpiryBadge } from './vault'
 
@@ -37,9 +37,9 @@ interface AllSeries {
 
 const REFRESH_MS = 30_000
 const RANGES = [
-  { id: '24h', label: '24h', ago: '24 hours ago' },
-  { id: '7d', label: '7d', ago: '7 days ago' },
-  { id: '30d', label: '30d', ago: '30 days ago' },
+  { id: '24h', label: '24h', words: '24 hours', ago: '24 hours ago' },
+  { id: '7d', label: '7d', words: '7 days', ago: '7 days ago' },
+  { id: '30d', label: '30d', words: '30 days', ago: '30 days ago' },
 ] as const
 type RangeId = (typeof RANGES)[number]['id']
 
@@ -243,6 +243,17 @@ export function DashboardPage() {
     .sort((a, b) => SEVERITY[a.health_status] - SEVERITY[b.health_status] || a.name.localeCompare(b.name))
   const unmonitored = shownProjects.filter((p) => !byProject.has(p.id))
 
+  // Summary tiles. All of them follow the selected range.
+  const incidents = events.data ? toIncidents(filter ? events.data.filter((e) => e.project_key === filter) : events.data) : null
+  const ongoing = incidents?.filter((i) => i.end === null).length ?? 0
+  const buckets = series.data ? enabled.flatMap((c) => series.data?.series[c.id] ?? []) : []
+  const uptime = uptimeOf(buckets)
+  const resp = responseStats(buckets)
+  // "Partial": the oldest result is much newer than the start of the range, so the % covers only part of it.
+  const coverageMs = buckets.length ? now - Math.min(...buckets.map((b) => new Date(b.t).getTime())) : null
+  const partial = !!series.data && coverageMs != null && coverageMs < series.data.window_seconds * 1000 * 0.95
+  const uptimeSub = enabled.length === 0 ? 'No active checks' : uptime == null ? 'No results yet' : partial ? `Partial · ${fmtDuration(coverageMs ?? 0)} of ${rangeInfo.label} recorded` : 'All checks combined'
+
   if (tv) {
     return (
       <TvBoard
@@ -262,12 +273,7 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        title={
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            Dashboard
-            <StatusPill items={items} partial={failed.length > 0} unmonitored={!!allChecks && enabled.length === 0} />
-          </span>
-        }
+        title="Dashboard"
         subtitle={<LiveStatus updated={updated} refreshing={refreshing} stale={failed.length > 0} />}
         actions={
           <>
@@ -298,6 +304,14 @@ export function DashboardPage() {
       )}
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat
+          label={`Uptime · ${rangeInfo.label}`}
+          unavailable={!series.data || !allChecks}
+          value={fmtPct(uptime)}
+          tone={uptime == null ? undefined : uptime >= 99.9 ? 'green' : uptime >= 99 ? 'amber' : 'red'}
+          sub={uptimeSub}
+          subTone={partial ? 'amber' : undefined}
+        />
         <HealthTile
           unavailable={!allChecks}
           total={enabled.length}
@@ -309,69 +323,81 @@ export function DashboardPage() {
           paused={paused.length}
           to={items.length > 0 ? '#needs-attention' : '#project-health'}
         />
-        {meta?.modules.scheduler && <Stat label="Failing jobs" to="/jobs" unavailable={!failingJobs} value={failingJobs?.length ?? 0} sub={failingJobs?.length ? 'View jobs' : 'All jobs passing'} tone={failingJobs?.length ? 'red' : undefined} />}
-        {meta?.modules.vault && <Stat label="Keys expiring (30 days)" to="/vault" unavailable={!expiring} value={expiring?.length ?? 0} sub={expiring?.length ? 'View vault' : 'Nothing expiring'} tone={expiring?.length ? 'amber' : undefined} />}
+        <Stat
+          label={`Avg response · ${rangeInfo.label}`}
+          unavailable={!series.data || !allChecks}
+          value={resp?.avg != null ? `${resp.avg} ms` : '—'}
+          sub={resp?.avg != null ? `Range ${resp.min}–${resp.max} ms` : enabled.length === 0 ? 'No active checks' : 'No results yet'}
+        />
+        <Stat
+          label={`Incidents · ${rangeInfo.label}`}
+          unavailable={!incidents}
+          value={incidents?.length ?? 0}
+          tone={ongoing > 0 ? 'red' : undefined}
+          sub={ongoing > 0 ? `${ongoing} ongoing` : incidents?.length ? 'All recovered' : 'None recorded'}
+          to={incidents?.length ? '#incidents' : undefined}
+        />
       </div>
 
-      {projects.data && projects.data.length === 0 ? (
-        <Empty title="No projects yet">
-          {admin ? (
-            <>
-              <Link to="/projects/new" className="text-emerald-400 hover:underline">Create a project</Link>, then add health checks and keepalive jobs to it.
-            </>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="min-w-0 space-y-4">
+          {projects.data && projects.data.length === 0 ? (
+            <Empty title="No projects yet">
+              {admin ? (
+                <>
+                  <Link to="/projects/new" className="text-emerald-400 hover:underline">Create a project</Link>, then add health checks and keepalive jobs to it.
+                </>
+              ) : (
+                'Nothing has been shared with you yet. Ask an admin to give you access to a project.'
+              )}
+            </Empty>
+          ) : !allChecks ? (
+            <Card className="px-4 py-3 text-sm text-zinc-400">Health checks are unavailable right now.</Card>
           ) : (
-            'Nothing has been shared with you yet. Ask an admin to give you access to a project.'
+            <>
+              {monitored.length > 0 && (
+                <div id="project-health" className="grid scroll-mt-4 grid-cols-1 gap-4">
+                  {monitored.map((p) => (
+                    <ProjectHealthCard key={p.id} project={p} checks={byProject.get(p.id) ?? []} series={series.data} now={now} range={rangeInfo} />
+                  ))}
+                </div>
+              )}
+
+              {unmonitored.length > 0 && (
+                <Card className="overflow-hidden">
+                  <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
+                    Not monitored yet · {unmonitored.length}
+                    <span className="ml-2 text-xs font-normal text-zinc-500">These projects have no health checks</span>
+                  </div>
+                  <ul className="divide-y divide-zinc-800/70">
+                    {unmonitored.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                        <Link to={`/projects/${p.key}`} className="truncate text-zinc-100 hover:underline">{p.name}</Link>
+                        {admin ? (
+                          <Link to={`/projects/${p.key}/checks/new`} className="shrink-0 text-xs text-emerald-400 hover:underline">+ Add a check</Link>
+                        ) : (
+                          <Link to={`/projects/${p.key}`} className="shrink-0 text-xs text-zinc-400 hover:underline">Open project</Link>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
+            </>
           )}
-        </Empty>
-      ) : (
-        <>
-          <AttentionCard items={items} failed={failed.length > 0} noChecks={!!allChecks && enabled.length === 0} />
-
-          {!allChecks ? (
-            <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">Health checks are unavailable right now.</Card>
-          ) : monitored.length > 0 ? (
-            <div id="project-health" className="mb-6 grid scroll-mt-4 grid-cols-1 gap-4 xl:grid-cols-2">
-              {monitored.map((p) => (
-                <ProjectHealthCard key={p.id} project={p} checks={byProject.get(p.id) ?? []} series={series.data} now={now} range={rangeInfo} />
-              ))}
-            </div>
-          ) : null}
-
-          {unmonitored.length > 0 && (
-            <Card className="mb-6 overflow-hidden">
-              <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
-                Not monitored yet · {unmonitored.length}
-                <span className="ml-2 text-xs font-normal text-zinc-500">These projects have no health checks</span>
-              </div>
-              <ul className="divide-y divide-zinc-800/70">
-                {unmonitored.map((p) => (
-                  <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-                    <Link to={`/projects/${p.key}`} className="truncate text-zinc-100 hover:underline">{p.name}</Link>
-                    {admin ? (
-                      <Link to={`/projects/${p.key}/checks/new`} className="shrink-0 text-xs text-emerald-400 hover:underline">+ Add a check</Link>
-                    ) : (
-                      <Link to={`/projects/${p.key}`} className="shrink-0 text-xs text-zinc-400 hover:underline">Open project</Link>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-        </>
-      )}
-
-      <IncidentsCard section={events} filter={filter} range={rangeInfo} />
-
-      {(meta?.modules.scheduler || meta?.modules.vault) && (
-        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {meta?.modules.scheduler && <UpcomingJobsCard jobs={jobs.data ? inScope(jobs.data) : null} error={!!jobs.error} />}
-          {meta?.modules.vault && <ExpiringKeysCard secrets={expiring} error={!!secrets.error} />}
         </div>
-      )}
 
-      {admin && <AlertStatusCard section={alertsStatus} />}
-
-      {showBackup && <BackupCard section={backup} />}
+        <aside aria-label="Status and operations" className="min-w-0 space-y-4">
+          <AttentionPanel items={items} failed={failed.length > 0} noChecks={!!allChecks && enabled.length === 0} />
+          <IncidentsPanel incidents={incidents} error={!!events.error} range={rangeInfo} />
+          <OperationsPanel
+            jobs={meta?.modules.scheduler ? { data: jobs.data ? inScope(jobs.data) : null, error: !!jobs.error } : undefined}
+            keys={meta?.modules.vault ? { data: expiring, error: !!secrets.error } : undefined}
+            alerts={admin ? alertsStatus : undefined}
+            backup={showBackup ? backup : undefined}
+          />
+        </aside>
+      </div>
     </>
   )
 }
@@ -442,67 +468,48 @@ function ProjectHealthCard({ project: p, checks, series, now, range }: { project
   )
 }
 
-function AttentionCard({ items, failed, noChecks }: { items: AttentionItem[]; failed: boolean; noChecks: boolean }) {
+function AttentionPanel({ items, failed, noChecks }: { items: AttentionItem[]; failed: boolean; noChecks: boolean }) {
   if (items.length === 0) {
     // Never claim "all clear" when something failed to load or nothing is being watched.
-    if (failed) {
-      return <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">Nothing needs attention in the parts that loaded, but some parts are unavailable.</Card>
-    }
-    if (noChecks) {
-      return <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">Nothing is being monitored yet. Add health checks to start watching your projects.</Card>
-    }
-    return null // "All systems operational" is the pill in the page header
+    const [dot, text]: ['up' | 'degraded' | 'none', string] = failed
+      ? ['degraded', 'Nothing needs attention in the parts that loaded, but some parts are unavailable.']
+      : noChecks
+        ? ['none', 'Nothing is being monitored yet. Add health checks to start watching your projects.']
+        : ['up', 'All systems operational']
+    return (
+      <div id="needs-attention" className="scroll-mt-4">
+        <Card className="flex items-start gap-2.5 px-4 py-3 text-sm text-zinc-200">
+          <span className="mt-1.5"><StatusDot status={dot} /></span>
+          <span role="status">{text}</span>
+        </Card>
+      </div>
+    )
   }
   return (
     <div id="needs-attention" className="scroll-mt-4">
-    <Card className="mb-6 overflow-hidden">
-      <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Needs attention · {items.length}</div>
-      <ul className="divide-y divide-zinc-800/70">
-        {items.slice(0, 8).map((i) => (
-          <li key={i.id}>
-            <Link to={i.to} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
-              <span className="flex min-w-0 items-center gap-2.5">
-                <Badge tone={i.tone}>{i.label}</Badge>
-                <span className="min-w-0">
-                  <span className="text-zinc-100">{i.title}</span>
-                  <span className="ml-2 text-xs text-zinc-500">{i.sub}</span>
-                </span>
-              </span>
-              {i.right}
-            </Link>
-          </li>
-        ))}
-      </ul>
-      {items.length > 8 && <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-500">…and {items.length - 8} more</div>}
-    </Card>
-    </div>
-  )
-}
-
-function BackupCard({ section }: { section: Section<BackupStatus> }) {
-  const s = section.data
-  return (
-    <section>
-      <h2 className="mb-2 font-medium text-zinc-200">Backups <span className="text-xs font-normal text-zinc-500">· whole instance, not filtered by project</span></h2>
-      <Card className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
-        {!s ? (
-          <span className="text-zinc-400">{section.error ? 'Backup status is unavailable right now.' : 'Loading…'}</span>
-        ) : (
-          <>
-            <span className="flex items-center gap-2 text-zinc-200">
-              <StatusDot status={s.running ? 'running' : s.state === 'ok' ? 'success' : s.state === 'stale' ? 'degraded' : s.state === 'failed' ? 'failed' : 'none'} />
-              {backupLabel(s).text}
-              {s.state === 'failed' && s.last_error && <span className="text-xs text-red-300">{s.last_error}</span>}
-            </span>
-            <span className="text-xs text-zinc-500">
-              {s.last_success_at ? `Last success ${fmtTime(s.last_success_at)}` : 'No successful backup yet'}
-              {' · '}
-              <Link to="/backups" className="text-emerald-400 hover:underline">Open backups</Link>
-            </span>
-          </>
-        )}
+      <Card className="overflow-hidden">
+        <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
+          Needs attention <span className="text-zinc-400">· {items.length}</span>
+        </div>
+        <ul className="divide-y divide-zinc-800/70">
+          {items.slice(0, 6).map((i) => (
+            <li key={i.id}>
+              <Link to={i.to} className="block px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Badge tone={i.tone}>{i.label}</Badge>
+                    <span className="truncate text-zinc-100">{i.title}</span>
+                  </span>
+                  {i.right}
+                </div>
+                <div className="mt-0.5 line-clamp-2 text-xs text-zinc-400" title={i.sub}>{i.sub}</div>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        {items.length > 6 && <div className="border-t border-zinc-800 px-4 py-2 text-xs text-zinc-400">…and {items.length - 6} more</div>}
       </Card>
-    </section>
+    </div>
   )
 }
 
@@ -527,13 +534,13 @@ function TileLink({ to, children, className }: { to: string; children: ReactNode
   return <Link to={to} className={className}>{children}</Link>
 }
 
-function Stat({ label, value, tone, sub, unavailable, to }: { label: string; value: number | string; tone?: 'red' | 'amber' | 'green'; sub?: string; unavailable?: boolean; to?: string }) {
+function Stat({ label, value, tone, sub, subTone, unavailable, to }: { label: string; value: number | string; tone?: 'red' | 'amber' | 'green'; sub?: string; subTone?: 'amber'; unavailable?: boolean; to?: string }) {
   const color = unavailable ? 'text-zinc-500' : tone === 'red' ? 'text-red-400' : tone === 'amber' ? 'text-amber-300' : tone === 'green' ? 'text-emerald-400' : 'text-zinc-100'
   const body = (
     <Card className={cx('h-full px-4 py-3', to && TILE_LINK)}>
       <div className="text-xs text-zinc-400">{label}</div>
-      <div className={cx('mt-1 text-2xl font-semibold', color)}>{unavailable ? '—' : value}</div>
-      <div className="mt-0.5 min-h-4 text-xs text-zinc-500">{unavailable ? 'Unavailable' : sub}</div>
+      <div className={cx('mt-1 text-2xl font-semibold tabular-nums', color)}>{unavailable ? '—' : value}</div>
+      <div className={cx('mt-0.5 min-h-4 text-xs', subTone === 'amber' && !unavailable ? 'text-amber-300' : 'text-zinc-400')}>{unavailable ? 'Unavailable' : sub}</div>
     </Card>
   )
   return to && !unavailable ? <TileLink to={to} className="block rounded-lg">{body}</TileLink> : body
@@ -559,10 +566,10 @@ function HealthTile({ unavailable, total, healthy, down, degraded, unknown, stal
   const seg = (n: number, color: string) => (n > 0 ? <div style={{ width: `${(n / total) * 100}%`, background: color }} /> : null)
   const body = (
     <Card className={cx('h-full px-4 py-3', !unavailable && TILE_LINK)}>
-      <div className="text-xs text-zinc-400">Health</div>
+      <div className="text-xs text-zinc-400">Checks healthy</div>
       <div className="mt-1 flex items-baseline gap-2">
-        <span className={cx('text-2xl font-semibold', tone)}>{unavailable ? '—' : `${healthy}/${total}`}</span>
-        <span className="text-xs text-zinc-500">{unavailable ? 'Unavailable' : total === 0 ? 'No active checks' : 'checks healthy'}</span>
+        <span className={cx('text-2xl font-semibold tabular-nums', tone)}>{unavailable ? '—' : `${healthy}/${total}`}</span>
+        <span className="text-xs text-zinc-500">{unavailable ? 'Unavailable' : total === 0 ? 'No active checks' : ''}</span>
       </div>
       {!unavailable && total > 0 && (
         <div className="mt-2 flex h-1.5 gap-px overflow-hidden rounded-full bg-zinc-800" role="img" aria-label={`${healthy} healthy, ${degraded} degraded, ${down} down, ${other} other`}>
@@ -580,7 +587,7 @@ function HealthTile({ unavailable, total, healthy, down, degraded, unknown, stal
       </div>
     </Card>
   )
-  return unavailable ? body : <TileLink to={to} className="col-span-2 block rounded-lg">{body}</TileLink>
+  return unavailable ? body : <TileLink to={to} className="block rounded-lg">{body}</TileLink>
 }
 
 /** "Updated 12s ago · auto-refresh every 30s" with a live dot: pulses while loading, amber when something failed. */
@@ -591,11 +598,10 @@ function LiveStatus({ updated, refreshing, stale }: { updated: number | null; re
     return () => clearInterval(t)
   }, [])
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex items-center gap-2" title={`Refreshes automatically every ${REFRESH_MS / 1000} seconds`}>
       <span className={cx('inline-block h-2 w-2 rounded-full', stale ? 'bg-amber-400' : 'bg-emerald-400', refreshing && 'animate-pulse')} aria-hidden="true" />
       <span>
         {refreshing ? 'Refreshing…' : updated ? `Updated ${timeAgo(new Date(updated).toISOString())}` : 'Not updated yet'}
-        <span className="text-zinc-500"> · auto-refresh every {REFRESH_MS / 1000}s</span>
       </span>
     </span>
   )
@@ -661,134 +667,61 @@ function toIncidents(events: RecentEvent[]): Incident[] {
   return out.sort((a, b) => new Date(b.end ?? new Date()).getTime() - new Date(a.end ?? new Date()).getTime() || new Date(b.start ?? 0).getTime() - new Date(a.start ?? 0).getTime())
 }
 
-function IncidentsCard({ section, filter, range }: { section: Section<RecentEvent[]>; filter: string; range: (typeof RANGES)[number] }) {
+function IncidentsPanel({ incidents, error, range }: { incidents: Incident[] | null; error: boolean; range: (typeof RANGES)[number] }) {
   const [all, setAll] = useState(false)
-  if (!section.data) {
-    return section.error ? <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">Incident history is unavailable right now.</Card> : null
-  }
-  const incidents = toIncidents(filter ? section.data.filter((e) => e.project_key === filter) : section.data)
-  const title = `Incidents · last ${range.label}`
-  if (incidents.length === 0) {
-    return (
-      <Card className="mb-6 flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-400">
+  let body: ReactNode
+  if (!incidents) {
+    if (!error) return null
+    body = <Card className="px-4 py-3 text-sm text-zinc-400">Incident history is unavailable right now.</Card>
+  } else if (incidents.length === 0) {
+    body = (
+      <Card className="flex items-center gap-2.5 px-4 py-3 text-sm text-zinc-300">
         <StatusDot status="up" />
-        No incidents in the last {range.label === '24h' ? '24 hours' : range.label === '7d' ? '7 days' : '30 days'}
+        No incidents in the last {range.words}
+      </Card>
+    )
+  } else {
+    const shown = all ? incidents : incidents.slice(0, 4)
+    body = (
+      <Card className="overflow-hidden">
+        <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
+          Recent incidents <span className="text-zinc-400">· {incidents.length}</span>
+        </div>
+        <ul className="divide-y divide-zinc-800/70">
+          {shown.map((i) => {
+            const dur = i.start ? fmtDuration((i.end ? new Date(i.end) : new Date()).getTime() - new Date(i.start).getTime()) : null
+            const when = `${i.start ? timeAgo(i.start) : `before ${range.label}`}${i.end ? ` · recovered ${timeAgo(i.end)}` : ''}`
+            return (
+              <li key={i.key}>
+                <Link to={`/checks/${i.checkId}`} className="block px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Badge tone={i.tone}>{i.tone === 'red' ? 'Down' : 'Degraded'}</Badge>
+                      <span className="truncate text-zinc-100">{i.checkName}</span>
+                    </span>
+                    {i.end === null ? <Badge tone="red">Ongoing</Badge> : dur && <span className="shrink-0 text-xs text-zinc-400">{dur}</span>}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-zinc-400" title={`${i.projectName} · ${when}${i.message ? ` · ${i.message}` : ''}`}>
+                    {i.projectName} · {when}
+                    {i.message ? ` · ${i.message}` : ''}
+                  </div>
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+        {incidents.length > 4 && (
+          <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-zinc-800 px-4 py-2 text-left text-xs text-zinc-400 hover:text-zinc-200">
+            {all ? 'Show fewer' : `Show ${incidents.length - 4} more`}
+          </button>
+        )}
       </Card>
     )
   }
-  const shown = all ? incidents : incidents.slice(0, 6)
-  return (
-    <Card className="mb-6 overflow-hidden">
-      <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
-        {title} <span className="text-zinc-500">· {incidents.length}</span>
-      </div>
-      <ul className="divide-y divide-zinc-800/70">
-        {shown.map((i) => {
-          const dur = i.start ? fmtDuration((i.end ? new Date(i.end) : new Date()).getTime() - new Date(i.start).getTime()) : null
-          return (
-            <li key={i.key}>
-              <Link to={`/checks/${i.checkId}`} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <Badge tone={i.tone}>{i.tone === 'red' ? 'Down' : 'Degraded'}</Badge>
-                  <span className="min-w-0">
-                    <span className="text-zinc-100">{i.checkName}</span>
-                    <span className="ml-2 text-xs text-zinc-500">{i.projectName}{i.message ? ` · ${i.message}` : ''}</span>
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
-                  {i.end === null && <Badge tone="red">Ongoing</Badge>}
-                  <span title={i.start ? fmtTime(i.start) : undefined}>
-                    {i.start ? timeAgo(i.start) : `before ${range.label}`}
-                    {i.end ? ` → recovered ${timeAgo(i.end)}` : ''}
-                  </span>
-                  {dur && <span className="text-zinc-500">· {dur}</span>}
-                </span>
-              </Link>
-            </li>
-          )
-        })}
-      </ul>
-      {incidents.length > 6 && (
-        <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-zinc-800 px-4 py-2 text-left text-xs text-zinc-400 hover:text-zinc-200">
-          {all ? 'Show fewer' : `Show ${incidents.length - 6} more`}
-        </button>
-      )}
-    </Card>
-  )
+  return <div id="incidents" className="scroll-mt-4">{body}</div>
 }
 
 // ───────────────────────── jobs, keys, alert channels ─────────────────────────
-
-function ListCard({ title, count, to, toLabel, children }: { title: string; count?: number; to: string; toLabel: string; children: ReactNode }) {
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2.5">
-        <span className="text-sm font-medium text-zinc-200">
-          {title}{count != null && <span className="text-zinc-500"> · {count}</span>}
-        </span>
-        <Link to={to} className="text-xs text-emerald-400 hover:underline">{toLabel}</Link>
-      </div>
-      {children}
-    </Card>
-  )
-}
-
-function UpcomingJobsCard({ jobs, error }: { jobs: Job[] | null; error: boolean }) {
-  if (!jobs) return <Card className="px-4 py-3 text-sm text-zinc-400">{error ? 'Jobs are unavailable right now.' : 'Loading jobs…'}</Card>
-  const active = jobs.filter((j) => j.enabled)
-  const next = [...active].sort((a, b) => new Date(a.next_run_at ?? 8.64e15).getTime() - new Date(b.next_run_at ?? 8.64e15).getTime()).slice(0, 5)
-  return (
-    <ListCard title="Next job runs" count={active.length} to="/jobs" toLabel="All pings">
-      {next.length === 0 ? (
-        <div className="px-4 py-3 text-sm text-zinc-500">{jobs.length === 0 ? 'No jobs yet.' : 'All jobs are paused.'}</div>
-      ) : (
-        <ul className="divide-y divide-zinc-800/70">
-          {next.map((j) => (
-            <li key={j.id}>
-              <Link to={`/jobs/${j.id}`} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
-                <span className="flex min-w-0 items-center gap-2">
-                  <StatusDot status={j.last_status} />
-                  <span className="truncate text-zinc-100">{j.name}</span>
-                  <span className="truncate text-xs text-zinc-500">{scopeName(j)}</span>
-                  {j.last_status === 'failed' && <Badge tone="red">failing</Badge>}
-                </span>
-                <span className="shrink-0 text-xs text-zinc-400" title={j.next_run_at ? fmtTime(j.next_run_at) : undefined}>
-                  {j.next_run_at ? timeAgo(j.next_run_at) : '—'}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </ListCard>
-  )
-}
-
-function ExpiringKeysCard({ secrets, error }: { secrets: Secret[] | null; error: boolean }) {
-  if (!secrets) return <Card className="px-4 py-3 text-sm text-zinc-400">{error ? 'Keys are unavailable right now.' : 'Loading keys…'}</Card>
-  const soonest = [...secrets].sort((a, b) => (a.days_left ?? 9999) - (b.days_left ?? 9999)).slice(0, 5)
-  return (
-    <ListCard title="Keys expiring soon" count={secrets.length} to="/vault" toLabel="Open vault">
-      {soonest.length === 0 ? (
-        <div className="flex items-center gap-2 px-4 py-3 text-sm text-zinc-500"><StatusDot status="up" />No keys expire in the next 30 days.</div>
-      ) : (
-        <ul className="divide-y divide-zinc-800/70">
-          {soonest.map((k) => (
-            <li key={k.id}>
-              <Link to={`/projects/${k.project_key}`} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
-                <span className="min-w-0">
-                  <span className="text-zinc-100">{k.name}</span>
-                  <span className="ml-2 text-xs text-zinc-500">{scopeName(k)} · {k.environment}</span>
-                </span>
-                <ExpiryBadge secret={k} />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </ListCard>
-  )
-}
 
 const CHANNEL_LABEL: Record<string, string> = { telegram: 'Telegram', discord: 'Discord', slack: 'Slack', email: 'Email' }
 
@@ -802,50 +735,148 @@ function failingChannels(a: AlertsStatus): AlertChannel[] {
   return a.channels.filter((c) => c.enabled && lastDelivery(a.history, c.name)?.status === 'failed')
 }
 
-function AlertStatusCard({ section }: { section: Section<AlertsStatus> }) {
-  const a = section.data
-  if (!a) return <Card className="mb-6 px-4 py-3 text-sm text-zinc-400">{section.error ? 'Alert channel status is unavailable right now.' : 'Loading alert channels…'}</Card>
-  const active = a.channels.filter((c) => c.enabled)
-  const failing = failingChannels(a)
-  const problem = a.channels.length === 0 ? 'No alert channels are set up — nobody gets notified when something breaks.' : active.length === 0 ? 'All alert channels are switched off — nobody gets notified.' : null
-  return (
-    <Card className="mb-6 overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2.5">
-        <span className="flex items-center gap-2 text-sm font-medium text-zinc-200">
-          <StatusDot status={problem ? 'degraded' : failing.length ? 'down' : 'up'} />
-          Alert channels <span className="text-zinc-500">· {active.length} active</span>
-        </span>
-        <Link to="/alerts" className="text-xs text-emerald-400 hover:underline">Manage alerts</Link>
-      </div>
-      {problem ? (
-        <div className="px-4 py-3 text-sm text-amber-300">
-          {problem} <Link to="/alerts" className="text-emerald-400 hover:underline">Set up alerts</Link>
-        </div>
-      ) : (
-        <ul className="divide-y divide-zinc-800/70">
-          {a.channels.slice(0, 6).map((c) => {
+type OpsTone = 'ok' | 'warn' | 'bad' | 'run' | 'none'
+const OPS_DOT = { ok: 'up', warn: 'degraded', bad: 'down', run: 'running', none: 'none' } as const
+const OPS_TEXT: Record<OpsTone, string> = { ok: 'text-zinc-400', warn: 'text-amber-300', bad: 'text-red-300', run: 'text-sky-300', none: 'text-zinc-400' }
+
+interface OpsDetail {
+  id: string
+  to: string
+  title: string
+  sub?: string
+  right?: ReactNode
+}
+interface OpsRow {
+  id: string
+  label: string
+  hint?: string
+  to: string
+  tone: OpsTone
+  summary: string
+  details?: OpsDetail[]
+}
+
+/**
+ * Jobs, keys, alert channels and backups in one card. Every row is a single line while healthy and only
+ * grows a short list underneath when something needs a look.
+ */
+function OperationsPanel({ jobs, keys, alerts, backup }: {
+  jobs?: { data: Job[] | null; error: boolean }
+  keys?: { data: Secret[] | null; error: boolean }
+  alerts?: Section<AlertsStatus>
+  backup?: Section<BackupStatus>
+}) {
+  const rows: OpsRow[] = []
+  const pending = (error: boolean) => (error ? 'Unavailable' : 'Loading…')
+
+  if (jobs) {
+    if (!jobs.data) {
+      rows.push({ id: 'jobs', label: 'Jobs', to: '/jobs', tone: 'none', summary: pending(jobs.error) })
+    } else {
+      const active = jobs.data.filter((j) => j.enabled)
+      const failing = active.filter((j) => j.last_status === 'failed')
+      const times = active.flatMap((j) => (j.next_run_at ? [new Date(j.next_run_at).getTime()] : []))
+      const next = times.length ? new Date(Math.min(...times)).toISOString() : null
+      if (failing.length > 0) {
+        rows.push({
+          id: 'jobs', label: 'Jobs', to: '/jobs', tone: 'bad', summary: `${failing.length} failing`,
+          details: failing.map((j) => ({ id: j.id, to: `/jobs/${j.id}`, title: j.name, sub: scopeName(j), right: <span className="shrink-0 text-zinc-400">{j.last_run_at ? timeAgo(j.last_run_at) : ''}</span> })),
+        })
+      } else if (jobs.data.length === 0) {
+        rows.push({ id: 'jobs', label: 'Jobs', to: '/jobs', tone: 'none', summary: 'No jobs yet' })
+      } else if (active.length === 0) {
+        rows.push({ id: 'jobs', label: 'Jobs', to: '/jobs', tone: 'none', summary: 'All paused' })
+      } else {
+        rows.push({ id: 'jobs', label: 'Jobs', to: '/jobs', tone: 'ok', summary: `${active.length} active${next ? ` · next run ${timeAgo(next)}` : ''}` })
+      }
+    }
+  }
+
+  if (keys) {
+    if (!keys.data) {
+      rows.push({ id: 'keys', label: 'Keys', to: '/vault', tone: 'none', summary: pending(keys.error) })
+    } else if (keys.data.length === 0) {
+      rows.push({ id: 'keys', label: 'Keys', to: '/vault', tone: 'ok', summary: 'None expiring in 30 days' })
+    } else {
+      const soonest = [...keys.data].sort((a, b) => (a.days_left ?? 9999) - (b.days_left ?? 9999))
+      rows.push({
+        id: 'keys', label: 'Keys', to: '/vault', tone: (soonest[0].days_left ?? 9999) <= 7 ? 'bad' : 'warn',
+        summary: `${soonest.length} expiring within 30 days`,
+        details: soonest.map((k) => ({ id: k.id, to: `/projects/${k.project_key}`, title: k.name, sub: k.environment, right: <ExpiryBadge secret={k} /> })),
+      })
+    }
+  }
+
+  if (alerts) {
+    const a = alerts.data
+    if (!a) {
+      rows.push({ id: 'alerts', label: 'Alerts', to: '/alerts', tone: 'none', summary: pending(!!alerts.error) })
+    } else {
+      const active = a.channels.filter((c) => c.enabled)
+      const failing = failingChannels(a)
+      if (a.channels.length === 0) {
+        rows.push({ id: 'alerts', label: 'Alerts', to: '/alerts', tone: 'warn', summary: 'None set up — nobody gets notified' })
+      } else if (active.length === 0) {
+        rows.push({ id: 'alerts', label: 'Alerts', to: '/alerts', tone: 'warn', summary: 'All off — nobody gets notified' })
+      } else if (failing.length > 0) {
+        rows.push({
+          id: 'alerts', label: 'Alerts', to: '/alerts', tone: 'bad', summary: `${failing.length} failing`,
+          details: failing.map((c) => {
             const d = lastDelivery(a.history, c.name)
-            return (
-              <li key={c.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
-                <span className="flex min-w-0 items-center gap-2">
-                  <Badge>{CHANNEL_LABEL[c.type] ?? c.type}</Badge>
-                  <span className="truncate text-zinc-100">{c.name}</span>
-                  {!c.enabled && <Badge>off</Badge>}
-                </span>
-                <span className="text-xs">
-                  {!d ? (
-                    <span className="text-zinc-500">nothing sent yet — <Link to="/alerts" className="text-emerald-400 hover:underline">send a test</Link></span>
-                  ) : d.status === 'sent' ? (
-                    <span className="text-zinc-400" title={fmtTime(d.at)}><span className="text-emerald-400">✓ delivered</span> {timeAgo(d.at)}{d.event === 'test' ? ' (test)' : ''}</span>
-                  ) : (
-                    <span className="text-red-300" title={fmtTime(d.at)}>✕ failed {timeAgo(d.at)}{d.error ? ` · ${d.error}` : ''}</span>
-                  )}
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+            return { id: c.id, to: '/alerts', title: c.name, sub: CHANNEL_LABEL[c.type] ?? c.type, right: <span className="shrink-0 text-zinc-400">{d ? `failed ${timeAgo(d.at)}` : ''}</span> }
+          }),
+        })
+      } else {
+        rows.push({ id: 'alerts', label: 'Alerts', to: '/alerts', tone: 'ok', summary: `${active.length} ${active.length === 1 ? 'channel' : 'channels'} active` })
+      }
+    }
+  }
+
+  if (backup) {
+    const s = backup.data
+    if (!s) {
+      rows.push({ id: 'backups', label: 'Backups', hint: 'Whole instance, not filtered by project', to: '/backups', tone: 'none', summary: pending(!!backup.error) })
+    } else {
+      const l = backupLabel(s)
+      const tone: OpsTone = l.tone === 'green' ? 'ok' : l.tone === 'amber' ? 'warn' : l.tone === 'red' ? 'bad' : 'run'
+      rows.push({
+        id: 'backups', label: 'Backups', hint: 'Whole instance, not filtered by project', to: '/backups', tone, summary: l.text,
+        details: s.state === 'failed' && s.last_error ? [{ id: 'err', to: '/backups', title: s.last_error }] : undefined,
+      })
+    }
+  }
+
+  if (rows.length === 0) return null
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">Operations</div>
+      <ul className="divide-y divide-zinc-800/70">
+        {rows.map((r) => (
+          <li key={r.id}>
+            <Link to={r.to} className="flex items-center gap-2 px-4 py-2.5 text-sm hover:bg-zinc-800/30">
+              <StatusDot status={OPS_DOT[r.tone]} />
+              <span className="shrink-0 font-medium text-zinc-100" title={r.hint}>{r.label}</span>
+              <span className={cx('min-w-0 flex-1 truncate text-right text-xs', OPS_TEXT[r.tone])} title={r.summary}>{r.summary}</span>
+            </Link>
+            {r.details && (
+              <ul className="pb-2">
+                {r.details.slice(0, 3).map((d) => (
+                  <li key={d.id}>
+                    <Link to={d.to} className="flex items-center justify-between gap-2 py-1 pr-4 pl-10 text-xs hover:bg-zinc-800/30">
+                      <span className="min-w-0 truncate text-zinc-300" title={d.title}>
+                        {d.title}
+                        {d.sub && <span className="ml-1.5 text-zinc-400">{d.sub}</span>}
+                      </span>
+                      {d.right}
+                    </Link>
+                  </li>
+                ))}
+                {r.details.length > 3 && <li className="py-1 pr-4 pl-10 text-xs text-zinc-400">+{r.details.length - 3} more</li>}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ul>
     </Card>
   )
 }
@@ -952,39 +983,5 @@ function TvBoard({ projects, byProject, series, unmonitoredCount, items, stale, 
         {unmonitoredCount > 0 && <div className="text-sm text-zinc-600">{unmonitoredCount} project{unmonitoredCount === 1 ? '' : 's'} without health checks not shown</div>}
       </div>
     </div>
-  )
-}
-
-/** The overall verdict, small enough for the page header. Links down to the list when something needs attention. */
-function StatusPill({ items, partial, unmonitored }: { items: AttentionItem[]; partial: boolean; unmonitored: boolean }) {
-  let tone: 'green' | 'red' | 'amber'
-  let text: string
-  if (items.length > 0) {
-    const bad = items.filter((i) => i.tone === 'red').length
-    tone = bad ? 'red' : 'amber'
-    text = bad ? `${bad} ${bad === 1 ? 'issue needs' : 'issues need'} attention` : `${items.length} ${items.length === 1 ? 'warning' : 'warnings'}`
-  } else if (partial || unmonitored) {
-    return null // the cards below explain why there's no verdict
-  } else {
-    tone = 'green'
-    text = 'All systems operational'
-  }
-  const cls = {
-    green: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-    red: 'border-red-500/40 bg-red-500/10 text-red-300',
-    amber: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
-  }[tone]
-  const dot = { green: 'bg-emerald-400', red: 'bg-red-400', amber: 'bg-amber-400' }[tone]
-  const body = (
-    <>
-      <span className={cx('inline-block h-1.5 w-1.5 rounded-full', dot)} aria-hidden="true" />
-      {text}
-    </>
-  )
-  const base = cx('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium', cls)
-  return items.length > 0 ? (
-    <TileLink to="#needs-attention" className={cx(base, 'hover:brightness-125')}>{body}</TileLink>
-  ) : (
-    <span className={base} role="status">{body}</span>
   )
 }
