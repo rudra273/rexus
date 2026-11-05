@@ -199,6 +199,20 @@ export interface SecretVersion {
   current: boolean
 }
 
+export interface ApiToken {
+  id: string
+  name: string
+  prefix: string
+  role: 'contributor' | 'viewer'
+  created_by: string | null
+  created_at: string
+  expires_at: string | null
+  last_used_at: string | null
+  last_used_ip: string | null
+  revoked_at: string | null
+  status: 'active' | 'expired' | 'revoked'
+}
+
 export interface BackupSettings {
   interval_minutes: number
   keep: number

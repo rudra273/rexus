@@ -2,7 +2,7 @@
 
 A self-hosted control panel for technical teams: projects, scheduled jobs (keepalives, pings), encrypted secrets and health — in one place. One Go binary with the React UI built in.
 
-> Status: **Phase 6** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, **alerts** (Telegram, Slack, Discord, email), and **backups** with one-step restore. See [plan.md](plan.md) for the full roadmap.
+> Status: **Phase 7** — login + 2FA, owner setup, projects, keepalive/ping jobs with run history, the encrypted **Vault**, **team management**, **health checks with a dashboard**, **alerts** (Telegram, Slack, Discord, email), **backups** with one-step restore, and a read-only **API** for other tools. All seven planned phases are built. See [plan.md](plan.md) for the roadmap.
 
 ## Quick start (Docker)
 
@@ -85,6 +85,53 @@ A check is 🟢 **Up**, 🟡 **Degraded** (slow, or SSL expiring), or 🔴 **Dow
 The **Dashboard** lists everything that needs attention across all projects — checks that are down or degraded, failed jobs, and keys about to expire — with the most serious projects first. Probe results are kept for 30 days.
 
 Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
+
+## API for other tools (CRM, CI, status boards)
+
+Owners and admins create **API tokens** under **API** in the sidebar. A tool then reads a project's status by its **project key** — for example a CRM that stores `acme-web` against a client and shows a green or red badge.
+
+```bash
+export REXUS_URL=https://rexus.yourcompany.com
+export REXUS_TOKEN=rxt_…
+
+curl -s -H "Authorization: Bearer $REXUS_TOKEN" $REXUS_URL/api/v1/projects/acme-web/status
+```
+
+```json
+{ "key": "acme-web", "name": "Acme Website", "status": "degraded",
+  "checks_total": 3, "checks_up": 2, "checks_degraded": 1, "checks_down": 0,
+  "jobs_total": 2, "jobs_failing": 0, "secrets_expiring_30d": 1,
+  "generated_at": "2026-11-05T12:00:00Z" }
+```
+
+`status` is `up`, `degraded`, `down`, `unknown` (not checked yet) or `none` (no checks).
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/health` | Checks the token works; shows its name and role |
+| `GET /api/v1/projects` | All projects with their status |
+| `GET /api/v1/projects/{key}/status` | The compact answer: overall status and counts |
+| `GET /api/v1/projects/{key}` | Everything: checks, jobs, secrets expiring in 30 days |
+| `GET /api/v1/projects/{key}/checks` | Health checks: status, response time, 24-hour uptime, SSL expiry |
+| `GET /api/v1/projects/{key}/jobs` | Cron jobs: schedule, last result |
+| `GET /api/v1/projects/{key}/secrets` | Secret names, environment, tags, expiry — never values |
+| `GET /api/v1/projects/{key}/secrets/{env}/{name}` | One secret's metadata |
+| `GET /api/v1/secrets/expiring?days=30` | Secrets across all projects that expire soon (or already have) |
+| `POST /api/v1/projects/{key}/secrets/{env}/{name}/reveal` | The secret's value — **contributor tokens only** |
+
+The same reference, with examples, is on the **API** page in Rexus.
+
+**Safety**
+
+- A token is **viewer** (status, names and expiry dates) or **contributor** (also notes, and secret values through the `reveal` call). It is never admin or owner, and the API is read-only — a leaked token can't change anything, add users or touch backups.
+- You see a token **once**, when you create it. Only a hash is stored. Tokens can expire (30 days, 90 days, 1 year, never) and be **revoked** at once.
+- The API never returns job URLs, headers or bodies, credentials in monitored URLs (the query string is cut off), or — for viewer tokens — notes and custom fields. Secret values come only from `reveal`.
+- Only API tokens work on `/api/v1`; a browser login doesn't, and a token doesn't work on the internal API behind the UI.
+- Every `reveal` is written to the **Audit log** under the token's name. Other use is logged at most once every 10 minutes per token, with a request count.
+- **300 requests per minute** per token (then `429` with `Retry-After`). Twenty wrong tokens from one address lock that address out of the API for 15 minutes.
+- The IP allowlist applies to the API, and **lockdown mode switches all tokens off**.
+- A token keeps working if the person who created it is removed; revoke it yourself when the integration goes away.
+- If you **rename a project's key**, the old key returns `404` immediately — update the tools that use it.
 
 ## Backups
 

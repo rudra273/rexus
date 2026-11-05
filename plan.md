@@ -2,7 +2,7 @@
 
 > A self-hosted, open-source control panel for technical teams: projects, encrypted secrets, scheduled jobs, and health — in one place.
 
-Status: **Phases 1–6 built** — next is Phase 7 (API & external tools). See §13.
+Status: **Phases 1–7 built** — every planned phase is done. Remaining: the license (MIT) and the first public release; see §13 "Later".
 
 ---
 
@@ -498,7 +498,8 @@ Each phase ends with something **working and usable**. Phases are small so the A
 
 **Done when:** backups run on schedule to a local/external folder and can be restored into an empty DB.
 
-### Phase 7 — API & external tools
+### Phase 7 — API & external tools ✅ built
+> Built Nov 2026. Notes: tokens are `rxt_` + 256 random bits, stored as a hash (shown once), role viewer or contributor only (never admin/owner), expiry 30d / 90d / 1y / never, revocable, max 50 active; the API is `/api/v1`, read-only, bearer-token only (browser sessions and tokens are kept apart); a contributor token may read secret values through a separate, always-audited `reveal` call; job URLs/headers/bodies and URL query strings are never returned; 300 requests/minute per token and a lock-out after 20 wrong tokens per address; lockdown mode and the IP allowlist apply; usage is audited (every reveal individually, other use at most every 10 minutes per token). API docs live on the **API** page in the UI and in the README; a machine-readable OpenAPI file is not generated yet.
 - API tokens (create / revoke, role-based, audit-logged).
 - Public REST API by project key (project info, health, jobs, expiring secrets — no secret values unless the token's role allows).
 - API docs page.

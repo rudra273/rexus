@@ -7,6 +7,7 @@ import { JobDetailPage, JobFormPage, JobsPage } from './pages/jobs'
 import { DashboardPage, ProjectDetailPage, ProjectNewPage } from './pages/projects'
 import { SettingsPage } from './pages/settings'
 import { AlertsPage } from './pages/alerts'
+import { IntegrationsPage } from './pages/integrations'
 import { BackupPill, BackupsPage, useBackupStatus } from './pages/backups'
 import { AcceptInvitePage, AuditPage, ResetPasswordPage, UsersPage } from './pages/team'
 import { VaultPage } from './pages/vault'
@@ -70,6 +71,7 @@ export default function App() {
         {isAdmin(user.role) && (
           <>
             <Route path="/alerts" element={<AlertsPage />} />
+            <Route path="/integrations" element={<IntegrationsPage />} />
             {meta.backup_enabled && <Route path="/backups" element={<BackupsPage />} />}
             <Route path="/users" element={<UsersPage />} />
             <Route path="/audit" element={<AuditPage />} />
@@ -93,6 +95,7 @@ function Layout() {
     ...(user && isAdmin(user.role)
       ? [
           { to: '/alerts', label: 'Alerts', end: false },
+          { to: '/integrations', label: 'API', end: false },
           ...(meta?.backup_enabled ? [{ to: '/backups', label: 'Backups', end: false }] : []),
           { to: '/users', label: 'Users', end: false },
           { to: '/audit', label: 'Audit log', end: false },

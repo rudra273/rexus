@@ -152,6 +152,7 @@ func scanSecret(row interface{ Scan(...any) error }) (*Secret, error) {
 // SecretFilter narrows ListSecrets. Zero values mean "no filter".
 type SecretFilter struct {
 	EnvironmentID string
+	ProjectID     string
 	Query         string // matches secret name, project key or project name
 	Tag           string
 	ExpiringDays  *int // expires within N days (already-expired secrets included)
@@ -166,6 +167,9 @@ func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, err
 	}
 	if f.EnvironmentID != "" {
 		add("s.environment_id = ?", f.EnvironmentID)
+	}
+	if f.ProjectID != "" {
+		add("p.id = ?", f.ProjectID)
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		add("(s.name ILIKE '%' || ? || '%' OR p.key ILIKE '%' || ? || '%' OR p.name ILIKE '%' || ? || '%')", q)
@@ -200,6 +204,12 @@ func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, err
 
 func (s *Store) SecretByID(ctx context.Context, id string) (*Secret, error) {
 	return scanSecret(s.Pool.QueryRow(ctx, secretSelect+` WHERE s.id = $1`, id))
+}
+
+// SecretByName finds a secret by project key, environment name and secret name.
+func (s *Store) SecretByName(ctx context.Context, projectKey, env, name string) (*Secret, error) {
+	return scanSecret(s.Pool.QueryRow(ctx, secretSelect+` WHERE p.key = $1 AND e.name = $2 AND s.name = $3`,
+		strings.ToLower(projectKey), strings.ToLower(env), name))
 }
 
 // CreateSecret inserts a secret and its first version. sec.ID must be set

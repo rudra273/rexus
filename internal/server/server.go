@@ -45,6 +45,12 @@ type Server struct {
 	mfaLimiter   *auth.Limiter // per user
 	setupLimiter *auth.Limiter // per IP
 	linkLimiter  *auth.Limiter // bad invite/reset tokens, per IP
+
+	// Public API (/api/v1)
+	tokenFails *auth.Limiter // invalid API tokens, per IP
+	tokenRate  *rateLimiter  // requests per minute, per token
+	useMu      sync.Mutex
+	useNotes   map[string]*useNote
 }
 
 func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, bk *backup.Service, log *slog.Logger, version string) *Server {
@@ -61,6 +67,9 @@ func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *sche
 		mfaLimiter:   auth.NewLimiter(5, 15*time.Minute),
 		setupLimiter: auth.NewLimiter(10, 15*time.Minute),
 		linkLimiter:  auth.NewLimiter(20, 15*time.Minute),
+		tokenFails:   auth.NewLimiter(20, 15*time.Minute),
+		tokenRate:    newRateLimiter(tokenRatePerMinute, time.Minute),
+		useNotes:     map[string]*useNote{},
 	}
 }
 
@@ -152,6 +161,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/backups/status", s.authed(s.handleBackupStatus))
 	mux.HandleFunc("POST /api/backups/run", s.authed(s.handleRunBackup))
 	mux.HandleFunc("PUT /api/backups/settings", s.authed(s.handleBackupSettings))
+
+	// API tokens (owner / admin)
+	mux.HandleFunc("GET /api/tokens", s.authed(s.handleListTokens))
+	mux.HandleFunc("POST /api/tokens", s.authed(s.handleCreateToken))
+	mux.HandleFunc("DELETE /api/tokens/{id}", s.authed(s.handleRevokeToken))
+
+	// Public API for other tools: API token only, never a browser session.
+	mux.HandleFunc("GET /api/v1/health", s.apiToken(s.handleV1Health))
+	mux.HandleFunc("GET /api/v1/projects", s.apiToken(s.handleV1Projects))
+	mux.HandleFunc("GET /api/v1/projects/{key}", s.apiToken(s.handleV1Project))
+	mux.HandleFunc("GET /api/v1/projects/{key}/status", s.apiToken(s.handleV1Status))
+	mux.HandleFunc("GET /api/v1/projects/{key}/checks", s.apiToken(s.handleV1Checks))
+	mux.HandleFunc("GET /api/v1/projects/{key}/jobs", s.apiToken(s.handleV1Jobs))
+	mux.HandleFunc("GET /api/v1/projects/{key}/secrets", s.apiToken(s.handleV1ProjectSecrets))
+	mux.HandleFunc("GET /api/v1/projects/{key}/secrets/{env}/{name}", s.apiToken(s.handleV1Secret))
+	mux.HandleFunc("POST /api/v1/projects/{key}/secrets/{env}/{name}/reveal", s.apiToken(s.handleV1Reveal))
+	mux.HandleFunc("GET /api/v1/secrets/expiring", s.apiToken(s.handleV1Expiring))
 
 	// Alerts (owner / admin)
 	mux.HandleFunc("GET /api/alerts/channels", s.authed(s.handleListChannels))
@@ -271,7 +297,9 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 // allows — combined with SameSite cookies this blocks CSRF.
 func (s *Server) csrf(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		// /api/v1 takes a bearer token, which a browser never attaches by itself,
+		// so there is nothing for a cross-site request to forge.
+		if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/") {
 			switch r.Method {
 			case http.MethodGet, http.MethodHead, http.MethodOptions:
 			default:
