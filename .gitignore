@@ -20,3 +20,8 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Local-only (this machine)
+CLAUDE.local.md
+start-local.sh
+.env.before-cleanup
