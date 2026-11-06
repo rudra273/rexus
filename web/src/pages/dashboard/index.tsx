@@ -7,7 +7,7 @@ import { Button, Card, Empty, PageHeader, Select, cx, timeAgo } from '../../ui'
 import { fmtDuration, responseStats, uptimeOf } from '../charts'
 import { degradedReason, fmtPct } from '../health'
 import { ExpiryBadge } from '../vault'
-import { useSection, readStoredDensity, storeDensity, type CardDensity, type AllSeries, REFRESH_MS, RANGES, type RangeId, type AlertsStatus, type RecentEvent, readStoredFilter, storeFilter, isStale, scopeName, SEVERITY, type AttentionItem } from './shared'
+import { useSection, type AllSeries, REFRESH_MS, RANGES, type RangeId, type AlertsStatus, type RecentEvent, readStoredFilter, storeFilter, isStale, scopeName, SEVERITY, type AttentionItem } from './shared'
 import { ProjectGrid } from './project_grid'
 import { AttentionPanel } from './attention'
 import { Stat, HealthTile } from './tiles'
@@ -59,11 +59,6 @@ export function DashboardPage() {
   }
   const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  const [density, setDensityState] = useState<CardDensity>(readStoredDensity)
-  const setDensity = (d: CardDensity) => {
-    storeDensity(d)
-    setDensityState(d)
-  }
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
@@ -289,7 +284,7 @@ export function DashboardPage() {
             <>
               {monitored.length > 0 && (
                 <div id="project-health" className="scroll-mt-4">
-                  <ProjectGrid projects={monitored} byProject={byProject} series={series.data} now={now} range={rangeInfo} density={density} onDensityChange={setDensity} />
+                  <ProjectGrid projects={monitored} byProject={byProject} series={series.data} now={now} range={rangeInfo} canEdit={admin} />
                 </div>
               )}
 

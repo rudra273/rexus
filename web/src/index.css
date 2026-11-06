@@ -101,6 +101,7 @@ select {
   opacity: 1;
   z-index: 40;
   background-image: none;
+  bottom: 16px; /* each card has a 16px gap under it inside its grid cell */
 }
 .react-grid-layout > .react-grid-item > .react-resizable-handle::after {
   right: 6px;

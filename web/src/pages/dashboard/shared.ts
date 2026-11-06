@@ -64,23 +64,6 @@ export function readStoredFilter(): string {
 }
 
 export type CardDensity = 'comfortable' | 'compact'
-const DENSITY_KEY = 'rexus.dashboard.density'
-
-export function readStoredDensity(): CardDensity {
-  try {
-    return localStorage.getItem(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable'
-  } catch {
-    return 'comfortable'
-  }
-}
-
-export function storeDensity(d: CardDensity) {
-  try {
-    localStorage.setItem(DENSITY_KEY, d)
-  } catch {
-    /* private mode: the choice still applies until reload */
-  }
-}
 
 export function storeFilter(key: string) {
   try {

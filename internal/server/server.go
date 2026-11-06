@@ -144,6 +144,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout-all", s.authed(s.handleLogoutAll))
 	mux.HandleFunc("GET /api/settings", s.authed(s.handleSettings))
 
+	// Dashboard layout and density, shared by everyone on this Rexus (anyone reads, owner / admin changes)
+	mux.HandleFunc("GET /api/dashboard/settings", s.authed(s.handleGetDashboardSettings))
+	mux.HandleFunc("PUT /api/dashboard/settings", s.authed(s.handlePutDashboardSettings))
+
 	// Team (owner / admin; checked inside each handler)
 	mux.HandleFunc("GET /api/users", s.authed(s.handleListUsers))
 	mux.HandleFunc("PATCH /api/users/{id}", s.authed(s.handleUpdateUser))

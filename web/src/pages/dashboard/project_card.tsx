@@ -5,7 +5,7 @@ import { NavIcon } from '../../icons'
 import { Badge, Card, StatusDot, WebsiteLink, cx, fmtTime, hostOf, timeAgo } from '../../ui'
 import { Sparkline, UptimeBar, uptimeOf } from '../charts'
 import { fmtPct, HealthBadge } from '../health'
-import { neededHeight } from './layout'
+import { CARD_CHROME } from './layout'
 import { type AllSeries, RANGES, isStale, SEVERITY } from './shared'
 
 /** Cards narrower than this (px of content width) switch to compact rows by themselves. */
@@ -32,14 +32,16 @@ function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, { width: 
 /**
  * One project: its uptime and, per check, a response-time line with a history strip (comfortable), or a
  * single line with the strip only (compact). The whole card opens the project; each row opens its check.
- * On the project grid (`fill`) it fills its panel, goes compact when the panel is too short for comfortable
- * rows, and scrolls if even that doesn't fit. While `editing` it can't be clicked, only dragged.
+ * On the project grid (`fill`) it fills its panel and reports how tall its content is (`onContentHeight`), so the
+ * panel can fit it; if someone gave the panel a fixed height (`manual`) that's too short, it scrolls. While
+ * `editing` it can't be clicked, only dragged, and a `manual` card has a "Fit to content" button (`onFit`).
  */
-export function ProjectHealthCard({ project: p, checks, series, now, range, compact, fill = false, editing = false }: { project: Project; checks: HealthCheck[]; series: AllSeries | null; now: number; range: (typeof RANGES)[number]; compact: boolean; fill?: boolean; editing?: boolean }) {
-  const [ref, { width }] = useSize<HTMLDivElement>()
-  const [panelRef, panel] = useSize<HTMLDivElement>()
-  const tooShort = fill && panel.height < neededHeight(checks.length, false)
-  const dense = compact || width < AUTO_COMPACT_BELOW || tooShort
+export function ProjectHealthCard({ project: p, checks, series, now, range, compact, fill = false, editing = false, manual = false, onFit, onContentHeight }: { project: Project; checks: HealthCheck[]; series: AllSeries | null; now: number; range: (typeof RANGES)[number]; compact: boolean; fill?: boolean; editing?: boolean; manual?: boolean; onFit?: () => void; onContentHeight?: (px: number) => void }) {
+  const [ref, { width, height }] = useSize<HTMLDivElement>()
+  const dense = compact || width < AUTO_COMPACT_BELOW
+  useEffect(() => {
+    if (onContentHeight && Number.isFinite(height)) onContentHeight(Math.ceil(height) + CARD_CHROME)
+  }, [height, onContentHeight])
   const sorted = [...checks].sort(
     (a, b) => Number(!a.enabled) - Number(!b.enabled) || SEVERITY[a.status] - SEVERITY[b.status] || a.name.localeCompare(b.name),
   )
@@ -52,7 +54,7 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
   const narrow = width < AUTO_COMPACT_BELOW
   const narrowSlots = Number.isFinite(width) ? Math.max(12, Math.min(40, Math.round(width / 7))) : 24
   return (
-    <div ref={panelRef} className={cx('relative', fill && 'h-full')}>
+    <div className={cx('relative', fill && 'h-full')}>
     <Card className={cx('group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500', fill && 'h-full overflow-y-auto')}>
       <div ref={ref}>
         <div className="mb-4 flex items-start justify-between gap-3">
@@ -89,6 +91,11 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
       </div>
     </Card>
     {editing && <div className="card-drag-handle absolute inset-0 z-30 cursor-move rounded-lg border-2 border-dashed border-emerald-500/60 bg-zinc-950/20" aria-hidden="true" />}
+    {editing && manual && (
+      <button type="button" onClick={onFit} className="absolute top-2 right-2 z-40 rounded border border-zinc-600 bg-zinc-900 px-2 py-0.5 text-xs text-zinc-200 hover:bg-zinc-800">
+        Fit to content
+      </button>
+    )}
     </div>
   )
 }
