@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cx, timeAgo } from '../../ui'
-import { REFRESH_MS, RANGES, type RangeId } from './shared'
+import { REFRESH_MS, RANGES, type CardDensity, type RangeId } from './shared'
 
 /** "Updated 12s ago · auto-refresh every 30s" with a live dot: pulses while loading, amber when something failed. */
 export function LiveStatus({ updated, refreshing, stale }: { updated: number | null; refreshing: boolean; stale: boolean }) {
@@ -32,6 +32,29 @@ export function RangeSwitch({ value, onChange }: { value: RangeId; onChange: (r:
           className={cx('rounded px-3 py-1.5 text-sm transition', value === r.id ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
         >
           {r.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Comfortable (response-time line per check) or compact (one line per check) project cards. */
+export function DensitySwitch({ value, onChange }: { value: CardDensity; onChange: (d: CardDensity) => void }) {
+  const options: { id: CardDensity; label: string }[] = [
+    { id: 'comfortable', label: 'Comfortable' },
+    { id: 'compact', label: 'Compact' },
+  ]
+  return (
+    <div role="group" aria-label="Card density" className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => onChange(o.id)}
+          aria-pressed={value === o.id}
+          className={cx('rounded px-2.5 py-1 text-xs transition', value === o.id ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
+        >
+          {o.label}
         </button>
       ))}
     </div>
