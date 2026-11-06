@@ -60,8 +60,7 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 | `rexus owner transfer --to EMAIL` | Hand ownership to another active user (you become an admin) |
 | `rexus settings show` | Show the company name and public URL in use, and whether each comes from `.env` or was saved in the web UI |
 | `rexus settings reset` | Clear the settings saved in the web UI, so the `.env` values apply again (a way back in if a bad public URL stops sign-ins) |
-| `rexus backup now` | Take a backup now (into `REXUS_BACKUP_DIR`) |
-| `rexus backup list` | List the backups in the backup folder |
+| `rexus backup --out PATH` | Write a backup of the database to a file (schedule it with cron if you want automatic ones) |
 | `rexus restore --file PATH` | Restore a backup into an **empty** database |
 | `rexus migrate` | Run database migrations and exit |
 | `rexus keygen` | Generate a `REXUS_MASTER_KEY` |
@@ -200,42 +199,38 @@ The same reference, with examples, is on the **API** page in Rexus.
 
 ## Backups
 
-Backups are plain `pg_dump` copies of the whole database, written to a folder **you** choose — a local disk, an external drive, a pendrive — never inside the Rexus folder and never into git. They are off by default, so you can switch them on only on the machine that keeps them.
+A backup is a plain `pg_dump` copy of the whole database. **Nothing is kept on the server:** you click **Backup now** and your browser saves the file to your own computer. The owner and admins can do this from **Backups** in the sidebar, or from **Settings → Backups**. It needs no configuration; the Backups switch in **Settings → Modules** turns the feature on or off (on by default).
 
-**Set the folder** in `.env`, then restart Rexus once. (`REXUS_BACKUP_ENABLED=true` turns them on from the start; or leave it off and switch backups on later, as the owner or an admin, under **Settings → Modules**, with no restart.)
+- The file is named `rexus-YYYYMMDD-HHMMSS.dump` (UTC).
+- A **"Last backup: 3d ago"** indicator is visible in the sidebar: green when you have a recent one, yellow when the last good backup is more than a week old (backups are taken by hand, so this is a nudge), red when the last attempt failed or none was ever made.
+- The Backups page lists the last 20 attempts: when, who, the size, and the error if one failed.
+- Rexus won't back up a database with no accounts in it yet.
+- Each backup is made in a private temporary file, checked with `pg_restore --list`, sent to you, and deleted. A failure shows as an error message, never as a half file.
 
+**Backups are not encrypted** — keep the file somewhere you trust. Vault secrets inside stay encrypted with `REXUS_MASTER_KEY`, so a backup alone doesn't reveal them. Keep that key safe and **separate** from your backups.
+
+**Not available yet:** scheduled backups and cloud storage (such as S3). Until then you can schedule your own with the command line, for example a nightly cron job:
+
+```bash
+rexus backup --out /somewhere/safe/rexus-$(date +%F).dump
 ```
-REXUS_BACKUP_ENABLED=true
-REXUS_BACKUP_DIR=/Volumes/MyDrive/rexus-backups
+
+**Restoring** works only into an **empty** database — it can never overwrite live data. On the server, with the downloaded file:
+
+```bash
+rexus restore --file rexus-20261105-120000.dump
 ```
 
-With Docker, `REXUS_BACKUP_DIR` is the folder on your computer; Docker mounts it into the container for you. (On Linux the folder must be writable by the container's user — `chmod 777` it, or `chown` it to uid 100.) If you unplug and re-plug a drive, restart Rexus (`docker compose restart rexus`) so Docker re-attaches it.
+With Docker Compose, copy the file in first, then restore (add `-f docker-compose.external-db.yml` if that is the file you use):
 
-Then open **Backups** (owner and admins):
+```bash
+docker compose cp rexus-20261105-120000.dump rexus:/tmp/
+docker compose exec rexus rexus restore --file /tmp/rexus-20261105-120000.dump
+```
 
-- **Backup now**, and an automatic schedule: every 15 minutes, hour, 6 hours (default), 24 hours, or manual only. After a failed attempt Rexus retries within 15 minutes.
-- **Keep the last N** backups (default 28). Older ones are deleted automatically — only files named `rexus-YYYYMMDD-HHMMSS.dump`; anything else in the folder is never touched.
-- A **"Last backup: 12m ago"** indicator is always visible in the sidebar: green when current, yellow when overdue (older than twice the interval), red when the last attempt failed or none has run yet.
-- A **failed backup raises an alert** (once when backups start failing) — see **Alerts**.
-- Rexus doesn't back up a database that has no accounts yet, so a freshly wiped instance can't push your good backups out with empty ones.
+Restores run in a single transaction (all or nothing). Afterwards you log in with the accounts from the backup. If your `REXUS_MASTER_KEY` isn't the one that made the backup, Rexus warns you, because vault secrets, 2FA and alert channels can't be read without it.
 
-Each backup is written to a temporary file, checked with `pg_restore --list`, and only then renamed into place, so a full disk or a crash can't leave something that looks like a good backup. Files are created private (`0600`).
-
-**Backups are not encrypted** — keep the folder on storage you trust. Vault secrets inside them stay encrypted with `REXUS_MASTER_KEY`, so a backup alone can't reveal them. The flip side: **a backup is useless without the master key that was in use when it was made.** Keep that key somewhere safe, separate from the backups.
-
-**Restoring** works only into an **empty** database — it can never overwrite live data. For a new or wiped instance:
-
-- **From the setup screen:** if Rexus finds backups in the backup folder, it offers to restore one (using the one-time setup code from the logs, like creating the owner); or
-- **From the command line:**
-
-  ```bash
-  rexus restore --file /backups/rexus-20261105-120000.dump
-  ```
-  With Docker: `docker compose exec rexus rexus restore --file /backups/rexus-….dump`
-
-Restores run in a single transaction (all or nothing). Afterwards you log in with the accounts from the backup. If your `REXUS_MASTER_KEY` isn't the one that made the backup, Rexus tells you so clearly. To restore a backup from a *newer* Rexus into an older one, upgrade Rexus first.
-
-The `pg_dump` in the Docker image is PostgreSQL 17 and must be at least as new as your database; with a newer external database (some Supabase or Neon versions), Rexus shows the "server version mismatch" message.
+The `pg_dump` in the Docker image is PostgreSQL 17 and must be at least as new as your database; with a newer external database, Rexus says so instead of making a bad backup.
 
 ## Alerts
 
@@ -262,7 +257,6 @@ Tokens and webhook URLs are stored encrypted and are never shown again. Webhooks
 | SSL certificate expiring | on | A certificate enters its warning window, then again at 7 and 1 days. |
 | Secret / API key expiring | on | At 30, 7 and 1 days before the expiry date (you choose the days), and once when it has expired. |
 | Cron job failed | on | A job starts failing (one alert, not one per failed run). |
-| Backup failed | on | Backups start failing — a full disk, an unplugged drive… (only listed when backups are switched on). |
 | New login from a new device | off | Someone logs in from an IP address or browser they haven't used before. |
 
 **No spam.** Down, recovered and job alerts fire once, when the state changes. Expiry reminders go to each channel once per threshold (a key you re-date reminds again). A channel that keeps failing is given up on after 3 tries; the failure shows under **Recent alerts**.
@@ -308,7 +302,7 @@ Roles say what a person can *do*; **project access** says which projects they ca
 
 Configuration is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error.
 
-Two settings can also be changed by the **owner or an admin** in **Settings → General** (click **Edit**), with no restart: the **company name** and the **public URL**. They are saved in the database and override the `REXUS_COMPANY_NAME` and `REXUS_BASE_URL` values, which stay as the defaults ("Use the default" goes back to them). Every change is in the audit log. **Settings → Modules** (click **Edit**) switches the **Vault**, **Jobs (scheduler)** and **Backups** on and off the same way, with no restart. They override `REXUS_MODULE_VAULT`, `REXUS_MODULE_SCHEDULER` and `REXUS_BACKUP_ENABLED`, which stay as the defaults (**Use the defaults from .env** goes back to them). A module that is off disappears from the UI and the API, and its data stays in the database: switching it back on brings it back as it was. Switching off Vault stops deploy tokens working, so apps that fetch their environment variables from Rexus at startup would fail to start; switching off Jobs stops your scheduled jobs (health checks keep running); backups can only be switched on once `REXUS_BACKUP_DIR` is set. Rexus asks you to confirm before switching anything off. Everything else (the database, master key, port, backups folder, email relay and the security policy) is still set in `.env` and shown read-only in **Settings**, marked *Managed on server*.
+Two settings can also be changed by the **owner or an admin** in **Settings → General** (click **Edit**), with no restart: the **company name** and the **public URL**. They are saved in the database and override the `REXUS_COMPANY_NAME` and `REXUS_BASE_URL` values, which stay as the defaults ("Use the default" goes back to them). Every change is in the audit log. **Settings → Modules** has one switch each for the **Vault**, **Jobs (scheduler)** and **Backups**, with no restart: click a switch and confirm. They override `REXUS_MODULE_VAULT` and `REXUS_MODULE_SCHEDULER`, which stay as the defaults (Backups has no `.env` setting: it is on unless you switch it off here) (**Use the defaults from .env** goes back to them). A module that is off disappears from the UI and the API, and its data stays in the database: switching it back on brings it back as it was. Switching off Vault stops deploy tokens working, so apps that fetch their environment variables from Rexus at startup would fail to start; switching off Jobs stops your scheduled jobs (health checks keep running); Rexus asks you to confirm before switching anything on or off. Everything else (the database, master key, port, backups folder, email relay and the security policy) is still set in `.env` and shown read-only in **Settings**, marked *Managed on server*.
 
 **IP allowlist.** `REXUS_IP_ALLOWLIST` takes comma-separated IPs or ranges, e.g. `203.0.113.5,10.0.0.0/8`; `0.0.0.0` allows everyone. Localhost is always allowed. Behind a tunnel or proxy on the same machine, Rexus reads the visitor's real IP from the `CF-Connecting-IP` or `X-Forwarded-For` header — but only when the connection itself comes from a local or private address, so a direct connection from the internet can't fake it. **Docker Desktop (Mac/Windows) hides real client IPs** (everything appears to come from Docker's own gateway), so the allowlist only works there when a tunnel/proxy supplies the header; on a Linux server it sees the true address.
 

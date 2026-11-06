@@ -10,7 +10,6 @@ import (
 	"net/mail"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -45,8 +44,6 @@ type Config struct {
 	TwoFAMode       string
 	LoginOwnerOnly  bool
 	IPAllowlist     []netip.Prefix // nil = allow all
-	BackupEnabled   bool
-	BackupDir       string
 	ModuleScheduler bool
 	ModuleVault     bool
 }
@@ -84,7 +81,6 @@ func Load() (*Config, []string, error) {
 		BaseURL:     strings.TrimRight(getenv("REXUS_BASE_URL", "http://localhost:8080"), "/"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		TwoFAMode:   strings.ToLower(getenv("REXUS_2FA_MODE", TwoFARequired)),
-		BackupDir:   os.Getenv("REXUS_BACKUP_DIR"),
 	}
 
 	if c.Env != "production" && c.Env != "development" {
@@ -130,16 +126,6 @@ func Load() (*Config, []string, error) {
 		fail("REXUS_IP_ALLOWLIST: %v", err)
 	}
 	c.IPAllowlist = allow
-
-	c.BackupEnabled = parseBool("REXUS_BACKUP_ENABLED", false, fail)
-	if c.BackupEnabled && c.BackupDir == "" {
-		fail("REXUS_BACKUP_DIR is required when REXUS_BACKUP_ENABLED=true")
-	}
-	if c.BackupDir != "" {
-		if abs, err := filepath.Abs(c.BackupDir); err == nil {
-			c.BackupDir = abs
-		}
-	}
 
 	// Optional SMTP relay. Port 465 = TLS from the start, anything else = STARTTLS.
 	c.SMTPHost = os.Getenv("REXUS_SMTP_HOST")
@@ -187,7 +173,6 @@ func (c *Config) Toggles() map[string]string {
 		"REXUS_2FA_MODE":         c.TwoFAMode,
 		"REXUS_LOGIN_OWNER_ONLY": strconv.FormatBool(c.LoginOwnerOnly),
 		"REXUS_IP_ALLOWLIST":     allow,
-		"REXUS_BACKUP_ENABLED":   strconv.FormatBool(c.BackupEnabled),
 		"REXUS_MODULE_SCHEDULER": strconv.FormatBool(c.ModuleScheduler),
 		"REXUS_MODULE_VAULT":     strconv.FormatBool(c.ModuleVault),
 	}

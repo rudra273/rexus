@@ -20,7 +20,7 @@ A technical tool for running and watching our projects. It runs on our own machi
 | **Dashboard** | Health of every project: up/down, response time, SSL expiry, failed jobs, expiring keys, incidents, alert-channel status, and a full-screen TV mode. |
 | **Users & Roles** | Owner/Admin invite team members; 4 simple roles: Owner, Admin, Contributor, Viewer. |
 | **Alerts** | Notify on failures and upcoming expiries. |
-| **Backups** | Optional backup copy of the database to local / external storage, managed from the UI. |
+| **Backups** | Download a backup of the database from the UI (nothing kept on the server). Scheduled and cloud backups are planned. |
 
 ### 1.1 Project identity
 
@@ -85,7 +85,6 @@ The same binary has two faces:
 | `POSTGRES_PASSWORD`, `POSTGRES_HOST_PORT` | `docker-compose.yml` only: bundled Postgres password and its localhost port. |
 | `DATABASE_URL` | Any Postgres connection string. |
 | `REXUS_MASTER_KEY` | Master encryption key for the vault. **Never stored in DB.** |
-| `REXUS_BACKUP_DIR` | Where backups are written — a path **outside** the app/server folder (local disk, external drive, pendrive). Needed only when `REXUS_BACKUP_ENABLED=true`. |
 | `REXUS_SMTP_*` | Optional SMTP relay for outgoing email. |
 
 No secrets are hardcoded in the code. `.env` is never committed. An `.env.example` with every variable and its default is committed.
@@ -107,7 +106,6 @@ All toggles are env vars — simple, explicit, version-controlled per deployment
 | `REXUS_2FA_MODE` | `required` \| `admins` \| `optional` \| `off` | `required`: everyone needs 2FA. `admins`: only Owner/Admin. `optional`: users choose. `off`: 2FA disabled (startup warning). |
 | `REXUS_LOGIN_OWNER_ONLY` | `false` \| `true` | **Lockdown mode** — only the Owner can log in; other sessions are revoked on start. Jobs keep running. |
 | `REXUS_IP_ALLOWLIST` | `0.0.0.0` \| comma-separated IPs/CIDRs | Who can access Rexus. `0.0.0.0` (or unset) = **allow all**. Example: `203.0.113.5,10.0.0.0/8`. |
-| `REXUS_BACKUP_ENABLED` | `false` \| `true` | Default for the backup switch (Settings → Modules can override it). Turns the backup feature on. **Not mandatory** — e.g. set only on the local machine. Requires `REXUS_BACKUP_DIR`. |
 | `REXUS_MODULE_SCHEDULER` | `true` \| `false` | Default for the Scheduler module (hidden from UI + API when off); Settings → Modules can override it. |
 | `REXUS_MODULE_VAULT` | `true` \| `false` | Default for the Vault module (hidden from UI + API when off); Settings → Modules can override it. |
 
@@ -179,7 +177,7 @@ rexus owner transfer --to other@company.com    # hand over ownership
 | **Scheduler:** see jobs & run history | ✅ | ✅ | ✅ | ✅ |
 | **Scheduler:** create / edit / run / delete jobs | ✅ | ✅ | ✅ | ❌ |
 | **Alerts:** configure channels (Telegram, Slack, …) | ✅ | ✅ | ❌ | ❌ |
-| **Backups:** backup now / interval / view | ✅ | ✅ | ❌ | ❌ |
+| **Backups:** backup now / view | ✅ | ✅ | ❌ | ❌ |
 | Invite / disable / remove users | ✅ | ✅* | ❌ | ❌ |
 | Issue password-reset link / reset 2FA | ✅ | ✅* | ❌ | ❌ |
 | View audit log | ✅ | ✅ | ❌ | ❌ |
@@ -301,7 +299,6 @@ Dashboard shows per check: current status, uptime %, response-time chart, last c
 | **SSL certificate** expiring | On |
 | **Secret / API key** expiring (days before: default `30, 7, 1`) | On |
 | **User job failed** | On |
-| **Backup failed** | On |
 | New user login / new device | Off |
 
 **Every alert message includes the project info + a link:**
@@ -330,42 +327,28 @@ Rexus connects to **any Postgres** via `DATABASE_URL`: Docker, local install, Su
 - Isolated, same on every machine, easy to reset.
 - To use an external/cloud Postgres instead, just set `DATABASE_URL` and skip the bundled Postgres service.
 
-### 9.3 Backup (optional, plain copy, no encryption)
-- **Off unless `REXUS_BACKUP_ENABLED=true`** (e.g. set only on the local machine). When off, all backup UI and the backup job are hidden.
-- When on, Rexus runs a scheduled `db_backup` job + on-demand backups using `pg_dump` (Postgres client bundled in the Docker image).
+### 9.3 Backup (download, plain copy, no encryption)
+> Changed Nov 2026: backups are a **download**, not a folder or a schedule. The earlier design (`REXUS_BACKUP_DIR`, `REXUS_BACKUP_ENABLED`, interval, keep-last-N, restore from the setup screen) is gone; scheduled backups come back with the cloud target (below).
+- **Backup now** (owner/admin) makes a `pg_dump` (Postgres client bundled in the Docker image) into a private temporary file, verifies it with `pg_restore --list`, streams it to the browser, and deletes it. **Nothing is stored on the server.** No `.env` settings: the Backups switch (Settings → Modules, on by default) turns the feature on or off.
   - `pg_dump` is used instead of copying Postgres's raw data folder — copying the raw folder while Postgres is running can produce a corrupt backup.
-- **No backup encryption for now** — keeps it simple. Backups are stored on storage we control (local disk, external drive, pendrive, other secure storage).
-  - Vault secrets are **still safe** inside the backup: they're stored as ciphertext and can only be decrypted with `REXUS_MASTER_KEY`.
-  - Other data in the backup (users, password hashes, project URLs, job configs) is readable — so keep backups on trusted storage.
-- Written to `REXUS_BACKUP_DIR`, **outside the app/server folder**, e.g. `~/rexus-backups` or `/Volumes/USB/rexus-backups`.
-  - In Docker, that host path is **mounted** into the container so files land on your disk.
-- Files: `rexus-YYYYMMDD-HHMMSS.dump` + a `latest` pointer; old backups rotated by the "keep last N" setting.
-- `.env` and any backup files are in **`.gitignore`** — never pushed to git.
+- **No backup encryption for now.** Vault secrets are **still safe** inside the file (ciphertext, readable only with `REXUS_MASTER_KEY`); other data (users, password hashes, project URLs, job configs) is readable — keep the file somewhere trusted.
 - **Keep `REXUS_MASTER_KEY` safe and separate from the backups.** Without it, restored vault secrets can't be decrypted.
-- Future option: turn on backup-file encryption if needed.
+- A history row (who, when, size, error) is kept in the `backups` table for 90 days. Every download is audit-logged (`backup.download`).
+- Not built yet: scheduled backups, retention, and where they would go. Until then `rexus backup --out FILE` can be run from cron.
 
 ### 9.4 Backup in the UI (Owner & Admin only)
-- **Always-visible "Last backup" indicator** (e.g. in the top bar / sidebar footer): `Last backup: 12 min ago`.
-  - Turns **yellow** if older than 2× the interval, **red** if the last backup failed or none exists yet.
-  - Visible to Owner/Admin; clicking it opens the Backups page.
-- **Backups page:**
-  - **Backup now** button.
-  - **Interval** setting (e.g. 15m / 1h / 6h / 24h / manual only) — stored in DB, editable in UI.
-  - **Keep last N** backups setting.
-  - List of backup files: time, size, status (success / failed + error).
-- Every backup run and settings change is audit-logged.
+- **Always-visible "Last backup" indicator** in the sidebar: `Last backup: 3 days ago`. **Yellow** when the last good backup is more than a week old, **red** when the last attempt failed or none exists. Clicking it opens the Backups page.
+- **Backups page:** the **Backup now** button, the status, a warning that the file isn't encrypted, the last 20 attempts, and how to restore. **Settings → Backups** has the same button.
 
 ### 9.5 Restore from backup
-- On start, if the database is **empty** and a backup is found in `REXUS_BACKUP_DIR`, Rexus offers to restore it (setup screen option + CLI) instead of a fresh setup.
-- CLI:
+- Restore works into an **empty** database only, from the command line:
   ```bash
-  rexus backup now
-  rexus backup list
-  rexus restore --file ~/rexus-backups/rexus-20261104-220000.dump
+  rexus backup --out ./rexus.dump
+  rexus restore --file ./rexus-20261104-220000.dump
   ```
 - Never auto-overwrites a non-empty database.
 
-**Future:** cloud backup targets (S3 / R2 / Backblaze / Drive) in addition to local.
+**Future:** cloud backup targets (S3 / R2 / Backblaze / Drive), with credentials saved in Settings (encrypted) and scheduled backups + retention there. The local download stays.
 
 ---
 
@@ -431,8 +414,8 @@ All IDs are UUIDs. All tables have `created_at` / `updated_at`. Tokens are store
 | `alert_channels` | type (`telegram`/`discord`/`slack`/`email`), name, config (encrypted — webhook URLs are sensitive), enabled |
 | `alert_events` | event, enabled, options (jsonb, e.g. reminder days) |
 | `alerts_sent` | event, project_id, channel_id, message, status, sent_at |
-| `backups` | file_name, size, status, error, trigger (`manual`/`scheduled`), triggered_by, started_at, finished_at |
-| `settings` | key, value (jsonb) — e.g. backup interval, keep-last-N |
+| `backups` | file_name, size, status, error, trigger (always `manual` now), triggered_by, started_at, finished_at |
+| `settings` | key, value (jsonb) — instance settings, dashboard layout |
 | `audit_log` | at, actor (user or API token), action, target_type, target_id, ip, details (jsonb) |
 
 ---
@@ -608,7 +591,7 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 - **Modules:** Vault, Jobs, and Backups availability.
 - **Security policy:** app-wide 2FA requirements, login restrictions, and IP rules. Personal 2FA controls remain in Profile.
 - **Notifications:** shared alert channels and delivery configuration, reusing the existing alert functionality.
-- **Backups:** schedule and retention, reusing existing backup settings. The dedicated Backups page remains the place for operational history/actions; Alerts remains the place for alert activity. Link to one canonical configuration form rather than duplicating it.
+- **Backups:** the folder-less download (Backup now) and a link to the Backups page. The dedicated Backups page remains the place for operational history/actions; Alerts remains the place for alert activity. Link to one canonical configuration form rather than duplicating it.
 - Respect §3: infrastructure, secrets, and feature toggles remain server-configured initially. Clearly mark them **Managed on server**, show readable values/status, and explain when a restart is needed. Never present a nonfunctional editable switch or expose configuration secrets.
 - Useful follow-on settings: default check intervals/timeouts, expiry-warning thresholds, and data retention. Reuse existing controls where supported; new defaults or writable instance settings require explicit backend validation, persistence, authorization, and audit coverage. Do not imply these are already supported.
 

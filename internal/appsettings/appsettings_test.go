@@ -280,8 +280,8 @@ func TestSecureCookiesFollowsTheURL(t *testing.T) {
 
 func boolp(b bool) *bool { return &b }
 
-// moduleDefaults is a typical .env: Vault and Scheduler on, backups off but a backup folder configured.
-var moduleDefaults = Values{CompanyName: "Rexus", BaseURL: "http://localhost:8080", ModuleVault: true, ModuleScheduler: true, BackupEnabled: false, BackupDirSet: true}
+// moduleDefaults: Vault, Scheduler and Backups all on, as they are out of the box.
+var moduleDefaults = Values{CompanyName: "Rexus", BaseURL: "http://localhost:8080", ModuleVault: true, ModuleScheduler: true, BackupEnabled: true}
 
 func TestModuleSwitchesOverrideAndPersist(t *testing.T) {
 	ctx := context.Background()
@@ -360,65 +360,5 @@ func TestResetModulesAndASwitchInOnePatch(t *testing.T) {
 	}
 	if v.ModuleVault || !v.ModuleScheduler {
 		t.Fatalf("got %+v, want vault off (just set) and scheduler back on (reset)", v)
-	}
-}
-
-func TestBackupsNeedAFolder(t *testing.T) {
-	ctx := context.Background()
-	fake := newFake()
-	noDir := moduleDefaults
-	noDir.BackupDirSet = false
-	s := New(fake, noDir)
-
-	_, err := s.Update(ctx, Patch{BackupEnabled: boolp(true)})
-	var bad *InvalidError
-	if !errors.As(err, &bad) || !strings.Contains(bad.Msg, "REXUS_BACKUP_DIR") {
-		t.Fatalf("want an InvalidError that names REXUS_BACKUP_DIR, got %v", err)
-	}
-	if s.Get().BackupEnabled || fake.sets != 0 {
-		t.Fatal("a refused change must not apply or save anything")
-	}
-	// turning backups off never needs a folder
-	if _, err := s.Update(ctx, Patch{BackupEnabled: boolp(false)}); err != nil {
-		t.Fatalf("switching backups off should always be allowed: %v", err)
-	}
-	// and with a folder, turning them on is fine
-	if _, err := New(newFake(), moduleDefaults).Update(ctx, Patch{BackupEnabled: boolp(true)}); err != nil {
-		t.Fatalf("with a folder, backups can be turned on: %v", err)
-	}
-}
-
-func TestLoadIgnoresBackupsOnWhenTheFolderIsGone(t *testing.T) {
-	// saved as "on", then REXUS_BACKUP_DIR was removed from .env: backups must not come up half-configured
-	ctx := context.Background()
-	fake := newFake()
-	fake.rows[key] = []byte(`{"backup_enabled":true,"module_vault":false}`)
-	noDir := moduleDefaults
-	noDir.BackupDirSet = false
-	s := New(fake, noDir)
-	if err := s.Load(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if s.Get().BackupEnabled {
-		t.Fatal("backups can't be on without a folder")
-	}
-	if s.Get().ModuleVault {
-		t.Fatal("the other saved switch should still apply")
-	}
-	if s.Sources()["backup_enabled"] != FromEnv {
-		t.Fatal("the ignored value should report as coming from .env")
-	}
-}
-
-func TestBackupDirSetIsNeverOverridden(t *testing.T) {
-	ctx := context.Background()
-	fake := newFake()
-	fake.rows[key] = []byte(`{"BackupDirSet":false,"backup_dir_set":false}`)
-	s := New(fake, moduleDefaults)
-	if err := s.Load(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Get().BackupDirSet {
-		t.Fatal("whether the backup folder exists comes from .env only")
 	}
 }

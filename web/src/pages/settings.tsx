@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { Badge, Button, Card, ErrorBox, Field, Input, PageHeader, Spinner, Tabs } from '../ui'
+import { BackupNowButton } from './backups'
+import { Badge, Button, Card, ErrorBox, Field, Input, Modal, PageHeader, Spinner, Tabs, fmtTime } from '../ui'
 
 interface InstanceSettings {
   company_name: string
@@ -18,8 +19,6 @@ interface InstanceSettings {
   defaults: { company_name: string; base_url: string; modules: Modules }
   /** The module switches as they are now. */
   modules: Modules
-  /** Backups can only be switched on when REXUS_BACKUP_DIR is set (it is a folder mounted into the container). */
-  backup_dir_set: boolean
 }
 
 interface Modules {
@@ -143,24 +142,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {tab === 'backups' && (
-          <Card className="divide-y divide-zinc-800">
-            <Row label="Backups" value={<OnOff on={meta.backup_enabled} />} managed={false} />
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
-              <div>
-                <div className="text-zinc-200">Schedule, retention and history</div>
-                <div className="text-xs text-zinc-500">
-                  {meta.backup_enabled
-                    ? 'Edited on the Backups page, which is the one place for these settings.'
-                    : instance.backup_dir_set
-                      ? <>Switch backups on under <Link to="/settings?tab=modules" className="text-emerald-400 hover:underline">Modules</Link>.</>
-                      : 'Set REXUS_BACKUP_DIR in .env and restart Rexus. After that you can switch backups on under Modules.'}
-                </div>
-              </div>
-              {meta.backup_enabled && <Link to="/backups" className="text-emerald-400 hover:underline">Open Backups</Link>}
-            </div>
-          </Card>
-        )}
+        {tab === 'backups' && <BackupsTab instance={instance} on={meta.backup_enabled} />}
       </div>
     </>
   )
@@ -312,117 +294,160 @@ const MODULES: { key: keyof Modules; source: 'module_vault' | 'module_scheduler'
   },
   {
     key: 'backups', source: 'backup_enabled', label: 'Backups',
-    what: 'Scheduled and manual backups of the database.',
-    whenOff: 'Backups: scheduled backups stop and “Backup now” is disabled. Backup files you already have stay where they are.',
+    what: 'Download a backup of the database to your computer.',
+    whenOff: 'Backups: the Backups page and “Backup now” go away. Backup files you already downloaded are not affected.',
   },
 ]
 
-/** Vault, Jobs and Backups on or off. Saved in the database; the .env values are the defaults. Nothing is deleted when a module is off. */
+/** What switching a module on does, for the confirm popup. */
+const WHEN_ON: Record<keyof Modules, string> = {
+  vault: 'Vault: the Vault pages and the secrets API come back, and deploy tokens work again.',
+  scheduler: 'Jobs: your scheduled jobs start running again.',
+  backups: 'Backups: the Backups page and “Backup now” come back.',
+}
+
+type Pending = { title: string; body: string[]; confirmLabel: string; danger: boolean; send: { modules?: Partial<Modules>; reset_modules?: boolean } }
+
+/** Vault, Jobs and Backups: one switch each. Every change asks first, then saves at once. Saved in the database; the .env values are the defaults. Nothing is deleted when a module is off. */
 function ModulesForm({ instance, onSaved }: { instance: InstanceSettings; onSaved: (next: InstanceSettings) => Promise<void> }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<Modules>(instance.modules)
+  const [pending, setPending] = useState<Pending | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const anySaved = MODULES.some((m) => instance.sources[m.source] === 'ui')
-  const changed = MODULES.filter((m) => draft[m.key] !== instance.modules[m.key])
 
-  async function send(body: { modules?: Partial<Modules>; reset_modules?: boolean }, willBeOff: (typeof MODULES)[number][]) {
-    if (willBeOff.length > 0 && !confirm(`Switch off ${willBeOff.map((m) => m.label).join(', ')}?\n\n${willBeOff.map((m) => m.whenOff).join('\n\n')}\n\nNothing is deleted. Switching a module back on brings it back as it was.`)) return
+  async function confirmIt() {
+    if (!pending) return
     setBusy(true)
     setError(null)
     setSaved(false)
     try {
-      const next = await api<InstanceSettings>('/api/settings', { method: 'PUT', body })
+      const next = await api<InstanceSettings>('/api/settings', { method: 'PUT', body: pending.send })
       await onSaved(next)
       setSaved(true)
-      setEditing(false)
+      setPending(null)
     } catch (e) {
       setError((e as Error).message)
+      setPending(null)
     } finally {
       setBusy(false)
     }
   }
 
-  function startEditing() {
-    setDraft(instance.modules)
-    setError(null)
+  function ask(m: (typeof MODULES)[number]) {
+    const turnOn = !instance.modules[m.key]
     setSaved(false)
-    setEditing(true)
+    setError(null)
+    setPending(
+      turnOn
+        ? { title: `Switch on ${m.label}?`, body: [WHEN_ON[m.key]], confirmLabel: 'Switch on', danger: false, send: { modules: { [m.key]: true } } }
+        : { title: `Switch off ${m.label}?`, body: [m.whenOff, 'Nothing is deleted. Switching it back on brings it back as it was.'], confirmLabel: 'Switch off', danger: true, send: { modules: { [m.key]: false } } },
+    )
   }
 
-  const badge = (m: (typeof MODULES)[number]) => (instance.sources[m.source] === 'ui' ? <>Saved here. Default from .env: {instance.defaults.modules[m.key] ? 'on' : 'off'}</> : 'From the .env file')
-  const needsFolder = (m: (typeof MODULES)[number]) => m.key === 'backups' && !instance.backup_dir_set
+  function askReset() {
+    const off = MODULES.filter((m) => instance.modules[m.key] && !instance.defaults.modules[m.key])
+    setSaved(false)
+    setError(null)
+    setPending({
+      title: 'Use the defaults from .env?',
+      body: [
+        'Vault, Jobs and Backups go back to what the .env file says: ' + MODULES.map((m) => `${m.label} ${instance.defaults.modules[m.key] ? 'on' : 'off'}`).join(', ') + '.',
+        ...off.map((m) => m.whenOff),
+      ],
+      confirmLabel: 'Use the defaults',
+      danger: off.length > 0,
+      send: { reset_modules: true },
+    })
+  }
 
-  if (!editing) {
-    return (
-      <div className="space-y-4">
-        <Card className="divide-y divide-zinc-800">
-          {MODULES.map((m) => (
-            <div key={m.key} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm">
+  const badge = (m: (typeof MODULES)[number]) => {
+    const where = m.key === 'backups' ? 'Default' : 'Default from .env' // Backups has no .env setting
+    if (instance.sources[m.source] === 'ui') return <>Saved here. {where}: {instance.defaults.modules[m.key] ? 'on' : 'off'}</>
+    return m.key === 'backups' ? 'Default setting' : 'From the .env file'
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="divide-y divide-zinc-800">
+        {MODULES.map((m) => {
+          const on = instance.modules[m.key]
+          const locked = !instance.editable || busy
+          return (
+            <div key={m.key} className="flex items-start justify-between gap-4 px-4 py-3 text-sm">
               <div className="min-w-0">
                 <div className="text-zinc-200">{m.label}</div>
                 <div className="text-xs text-zinc-400">{m.what}</div>
                 <div className="text-xs text-zinc-400">{badge(m)}</div>
               </div>
-              <OnOff on={instance.modules[m.key]} />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={on}
+                aria-label={m.label}
+                disabled={locked}
+                onClick={() => ask(m)}
+                className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:opacity-50 ${on ? 'bg-emerald-500' : 'bg-zinc-700'}`}
+              >
+                <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${on ? 'translate-x-5' : ''}`} />
+              </button>
             </div>
-          ))}
-        </Card>
-        {!instance.backup_dir_set && !instance.modules.backups && (
-          <p className="text-xs text-zinc-400">Backups can't be switched on yet: set <code>REXUS_BACKUP_DIR</code> in <code>.env</code> (a folder for the backup files) and restart Rexus.</p>
-        )}
-        <div className="flex items-center gap-3">
-          {instance.editable && <Button variant="secondary" onClick={startEditing}>Edit</Button>}
-          {saved && <span role="status" className="text-sm text-emerald-400">Saved</span>}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <form
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault()
-        void send({ modules: Object.fromEntries(changed.map((m) => [m.key, draft[m.key]])) }, changed.filter((m) => !draft[m.key]))
-      }}
-      className="space-y-4"
-    >
-      <Card className="divide-y divide-zinc-800">
-        {MODULES.map((m) => (
-          <label key={m.key} className="flex cursor-pointer items-start gap-3 px-4 py-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 accent-emerald-500"
-              checked={draft[m.key]}
-              disabled={busy || (needsFolder(m) && !draft[m.key])}
-              onChange={(e) => setDraft({ ...draft, [m.key]: e.target.checked })}
-            />
-            <span className="min-w-0">
-              <span className="block text-zinc-200">{m.label}</span>
-              <span className="block text-xs text-zinc-400">{m.what}</span>
-              {needsFolder(m) && <span className="block text-xs text-amber-300">Needs a backup folder: set REXUS_BACKUP_DIR in .env and restart Rexus.</span>}
-            </span>
-          </label>
-        ))}
+          )
+        })}
       </Card>
       <ErrorBox error={error} />
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={busy || changed.length === 0}>{busy ? 'Saving…' : 'Save changes'}</Button>
-        <Button type="button" variant="ghost" onClick={() => { setError(null); setEditing(false) }} disabled={busy}>Cancel</Button>
-        {anySaved && (
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void send({ reset_modules: true }, MODULES.filter((m) => instance.modules[m.key] && !instance.defaults.modules[m.key]))}
-            className="ml-auto"
-          >
-            Use the defaults from .env
-          </Button>
+        {saved && <span role="status" className="text-sm text-emerald-400">Saved</span>}
+        {instance.editable && anySaved && (
+          <Button type="button" variant="ghost" disabled={busy} onClick={askReset}>Use the defaults from .env</Button>
         )}
+        {!instance.editable && <span className="text-sm text-zinc-400">You can't change these.</span>}
       </div>
-    </form>
+      {pending && (
+        <Modal title={pending.title} onClose={() => !busy && setPending(null)}>
+          <div className="space-y-3 text-sm text-zinc-300">
+            {pending.body.map((t) => <p key={t}>{t}</p>)}
+          </div>
+          <div className="mt-5 flex justify-end gap-3">
+            <Button type="button" variant="ghost" onClick={() => setPending(null)} disabled={busy}>Cancel</Button>
+            <Button type="button" variant={pending.danger ? 'danger' : 'primary'} onClick={() => void confirmIt()} disabled={busy}>{busy ? 'Saving…' : pending.confirmLabel}</Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+/** Backups: switched on under Modules. Backup now makes a copy of the database and saves it to this computer. */
+function BackupsTab({ instance, on }: { instance: InstanceSettings; on: boolean }) {
+  const [st, setSt] = useState<{ running?: boolean; last_success_at?: string | null } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<{ name: string; size: number } | null>(null)
+  const load = () => api<typeof st>('/api/backups/status').then(setSt).catch(() => {})
+  useEffect(() => {
+    if (!on || !instance.editable) return
+    void load()
+    window.addEventListener('rexus:backup', load)
+    return () => window.removeEventListener('rexus:backup', load)
+  }, [on, instance.editable])
+
+  return (
+    <div className="space-y-4">
+      <Card className="divide-y divide-zinc-800">
+        <Row label="Backups" value={<OnOff on={on} />} managed={false} />
+        {on && <Row label="Last good backup" value={st?.last_success_at ? fmtTime(st.last_success_at) : 'none yet'} managed={false} />}
+      </Card>
+      {!on && <p className="text-xs text-zinc-400">Backups are off. Switch them on under <Link to="/settings?tab=modules" className="text-emerald-400 hover:underline">Modules</Link>.</p>}
+      {on && <p className="text-xs text-zinc-400">A backup is a copy of the whole database, saved to this computer. Nothing is kept on the server. It is not encrypted, so keep it somewhere you trust.</p>}
+      <ErrorBox error={error} />
+      {done && <p role="status" className="text-sm text-emerald-400">Saved {done.name} to your downloads.</p>}
+      {on && instance.editable && (
+        <div className="flex flex-wrap items-center gap-3">
+          <BackupNowButton running={st?.running} onDone={(r) => { setDone(r); void load() }} onError={(m) => setError(m || null)} />
+          <Link to="/backups" className="text-sm text-emerald-400 hover:underline">Open the Backups page</Link>
+        </div>
+      )}
+    </div>
   )
 }
 

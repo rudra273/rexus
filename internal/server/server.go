@@ -127,8 +127,6 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("POST /api/setup", s.handleSetup)
-	mux.HandleFunc("GET /api/setup/backups", s.handleSetupBackups)
-	mux.HandleFunc("POST /api/setup/restore", s.handleSetupRestore)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	// Invite and password-reset links (the token in the URL is the credential).
 	mux.HandleFunc("GET /api/join/{token}", s.handleJoinInfo)
@@ -166,11 +164,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/owner/transfer", s.authed(s.handleTransferOwnership))
 	mux.HandleFunc("GET /api/audit", s.authed(s.handleAudit))
 
-	// Backups (owner / admin; 404 unless backups are switched on)
+	// Backups (owner / admin; 404 unless backups are switched on): a download, nothing is kept on the server
 	mux.HandleFunc("GET /api/backups", s.authed(s.handleListBackups))
 	mux.HandleFunc("GET /api/backups/status", s.authed(s.handleBackupStatus))
-	mux.HandleFunc("POST /api/backups/run", s.authed(s.handleRunBackup))
-	mux.HandleFunc("PUT /api/backups/settings", s.authed(s.handleBackupSettings))
+	mux.HandleFunc("POST /api/backups/download", s.authed(s.handleDownloadBackup))
 
 	// API tokens (owner / admin)
 	mux.HandleFunc("GET /api/tokens", s.authed(s.handleListTokens))

@@ -18,10 +18,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}"
 
 # ---- 3. Small runtime image ----
 FROM alpine:3.22
-# postgresql-client provides pg_dump/pg_restore for backups (Phase 6).
+# postgresql-client provides pg_dump/pg_restore for backups.
 RUN apk add --no-cache ca-certificates tzdata postgresql17-client \
-    && addgroup -S rexus && adduser -S -G rexus -h /app rexus \
-    && mkdir /backups && chown rexus:rexus /backups
+    && addgroup -S rexus && adduser -S -G rexus -h /app rexus
 COPY --from=go /out/rexus /usr/local/bin/rexus
 USER rexus
 WORKDIR /app

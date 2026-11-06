@@ -23,8 +23,6 @@ func (s *Server) settingsPayload(a *authCtx) map[string]any {
 		"sources":      s.settings.Sources(),
 		"defaults":     map[string]any{"company_name": d.CompanyName, "base_url": d.BaseURL, "modules": modules(d)},
 		"modules":      modules(v),
-		// Backups can only be switched on when REXUS_BACKUP_DIR is set (it is a folder mounted into the container).
-		"backup_dir_set": v.BackupDirSet,
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -98,15 +97,6 @@ func clip(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// reason turns a file-system error into its short human text ("permission denied").
-func reason(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
-}
-
 // toolError turns a failed pg_dump / pg_restore run into a message people can act on.
 func toolError(tool string, err error, stderr string) error {
 	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
@@ -150,30 +140,15 @@ func (s *Service) verify(ctx context.Context, path string) error {
 	return nil
 }
 
-// dumpToFile writes a backup named `name` into the backup folder. It writes to
-// a .partial file and renames it only once the dump finished and verified, so
-// a crash or full disk can never leave something that looks like a good backup.
-func (s *Service) dumpToFile(ctx context.Context, name string) (int64, error) {
-	if s.dir == "" {
-		return 0, errors.New("REXUS_BACKUP_DIR is not set")
-	}
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return 0, fmt.Errorf("can't create the backup folder %s: %s", s.dir, reason(err))
-	}
-	final := filepath.Join(s.dir, name)
-	part := final + ".partial"
-	// 0600: the file holds password hashes and encrypted secrets.
-	f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+// dump writes a backup into the file at path (which must already exist: the caller made it private). The
+// backup only counts once pg_dump finished and the result verified, so a crash or a full disk can never leave
+// something that looks like a good backup.
+func (s *Service) dump(ctx context.Context, path string) (int64, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("can't write to the backup folder %s: %s", s.dir, reason(err))
+		return 0, fmt.Errorf("can't write the temporary backup file: %v", err)
 	}
-	ok := false
-	defer func() {
-		f.Close()
-		if !ok {
-			os.Remove(part)
-		}
-	}()
+	defer f.Close()
 
 	ctx, cancel := context.WithTimeout(ctx, dumpTimeout)
 	defer cancel()
@@ -188,7 +163,7 @@ func (s *Service) dumpToFile(ctx context.Context, name string) (int64, error) {
 		return 0, toolError("pg_dump", err, stderr.String())
 	}
 	if err := f.Sync(); err != nil {
-		return 0, fmt.Errorf("can't write to the backup folder %s: %s", s.dir, reason(err))
+		return 0, fmt.Errorf("can't write the temporary backup file: %v", err)
 	}
 	info, err := f.Stat()
 	if err != nil {
@@ -198,15 +173,11 @@ func (s *Service) dumpToFile(ctx context.Context, name string) (int64, error) {
 		return 0, errors.New("pg_dump produced an empty file")
 	}
 	if err := f.Close(); err != nil {
-		return 0, fmt.Errorf("can't write to the backup folder %s: %s", s.dir, reason(err))
+		return 0, fmt.Errorf("can't write the temporary backup file: %v", err)
 	}
-	if err := s.verify(ctx, part); err != nil {
-		return 0, fmt.Errorf("the backup was written but failed verification: %w", err)
+	if err := s.verify(ctx, path); err != nil {
+		return 0, fmt.Errorf("the backup was made but failed verification: %w", err)
 	}
-	if err := os.Rename(part, final); err != nil {
-		return 0, fmt.Errorf("can't finish the backup file: %s", reason(err))
-	}
-	ok = true
 	return info.Size(), nil
 }
 

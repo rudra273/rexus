@@ -1,30 +1,26 @@
 package server
 
 import (
-	"context"
 	"errors"
+	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"rexus/internal/backup"
-	"rexus/internal/db"
-	"rexus/internal/store"
 )
 
 // backupsOn answers 404 (with the reason) when backups aren't switched on.
 func (s *Server) backupsOn(w http.ResponseWriter) bool {
 	if !s.settings.Get().BackupEnabled {
-		writeError(w, http.StatusNotFound, "backups are switched off — turn them on in Settings → Modules (the backup folder, REXUS_BACKUP_DIR, must be set in .env first)")
+		writeError(w, http.StatusNotFound, "backups are switched off — turn them on in Settings → Modules")
 		return false
 	}
 	return true
 }
 
-type backupRow struct {
-	*store.BackupRecord
-	OnDisk bool `json:"on_disk"` // the file is still in the backup folder
-}
-
+// handleListBackups is the Backups page: the status and the last few backups that were made.
 func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	if !requireAdmin(w, a) || !s.backupsOn(w) {
 		return
@@ -34,27 +30,12 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request, a *au
 		s.internalError(w, r, err)
 		return
 	}
-	recs, err := s.store.ListBackupRecords(r.Context(), 60)
+	recs, err := s.store.ListBackupRecords(r.Context(), 20)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	onDisk := map[string]bool{}
-	if files, err := s.backups.Files(); err == nil {
-		for _, f := range files {
-			onDisk[f.Name] = true
-		}
-	}
-	rows := make([]backupRow, 0, len(recs))
-	for _, rec := range recs {
-		rows = append(rows, backupRow{BackupRecord: rec, OnDisk: rec.FileName != nil && onDisk[*rec.FileName]})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      st,
-		"backups":     rows,
-		"intervals":   backup.AllowedIntervals,
-		"dir_problem": s.backups.CheckDir(),
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": st, "backups": recs})
 }
 
 // handleBackupStatus is the light call behind the always-visible "last backup" indicator.
@@ -74,135 +55,47 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request, a *a
 	writeJSON(w, http.StatusOK, st)
 }
 
-func (s *Server) handleRunBackup(w http.ResponseWriter, r *http.Request, a *authCtx) {
+// handleDownloadBackup makes a backup of the whole database and sends it as a file. Nothing is kept on the
+// server. It is a POST (not a link) so the usual request check applies, and a failure comes back as an error
+// message before any file bytes are sent, never as a half file.
+func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	if !requireAdmin(w, a) || !s.backupsOn(w) {
 		return
 	}
-	if err := s.backups.Trigger("manual", &a.user.ID); err != nil {
-		if errors.Is(err, backup.ErrBusy) {
-			writeError(w, http.StatusConflict, "a backup is already running")
-			return
-		}
-		s.internalError(w, r, err)
-		return
-	}
-	s.audit(r, a, "backup.run", "backup", "", nil)
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
-}
+	// The server's normal write limit is a minute; a big database takes longer to dump and send.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(35 * time.Minute))
 
-func (s *Server) handleBackupSettings(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if !requireAdmin(w, a) || !s.backupsOn(w) {
-		return
-	}
-	var in backup.Settings
-	if !decodeJSON(w, r, &in) {
-		return
-	}
-	if err := s.backups.SetSettings(r.Context(), in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.audit(r, a, "backup.settings", "backup", "", map[string]any{"interval_minutes": in.IntervalMinutes, "keep": in.Keep})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// ---- restore from the setup screen ----
-//
-// Only possible while Rexus has no owner (a brand-new or wiped database), and
-// protected by the same one-time setup code as creating the owner. A running
-// instance's data can never be overwritten from here.
-
-func (s *Server) handleSetupBackups(w http.ResponseWriter, r *http.Request) {
-	if exists, err := s.store.OwnerExists(r.Context()); err != nil {
-		s.internalError(w, r, err)
-		return
-	} else if exists {
-		writeError(w, http.StatusNotFound, "setup already completed")
-		return
-	}
-	if !s.settings.Get().BackupEnabled {
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "files": []any{}})
-		return
-	}
-	files, err := s.backups.Files()
+	d, err := s.backups.Create(r.Context(), &a.user.ID)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "files": []any{}, "problem": "can't read the backup folder"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "files": files})
-}
-
-func (s *Server) handleSetupRestore(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Code string `json:"code"`
-		File string `json:"file"`
-	}
-	if !decodeJSON(w, r, &in) {
-		return
-	}
-	ip := clientIP(r)
-	if s.setupLimiter.Blocked(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts — try again in 15 minutes")
-		return
-	}
-	if exists, err := s.store.OwnerExists(r.Context()); err != nil {
-		s.internalError(w, r, err)
-		return
-	} else if exists {
-		s.clearSetupCode()
-		writeError(w, http.StatusNotFound, "setup already completed")
-		return
-	}
-	if !s.checkSetupCode(in.Code) {
-		s.setupLimiter.Fail(ip)
-		writeError(w, http.StatusForbidden, "invalid setup code — check the Rexus server logs")
-		return
-	}
-	if !s.settings.Get().BackupEnabled {
-		writeError(w, http.StatusBadRequest, "backups are switched off — turn them on in Settings → Modules (the backup folder, REXUS_BACKUP_DIR, must be set in .env first)")
-		return
-	}
-	path, err := s.backups.ResolveFile(in.File)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// A big restore can outlast the request; it must not be cancelled half way.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 35*time.Minute)
-	defer cancel()
-	s.log.Warn("restoring database from backup", "file", in.File)
-	if err := s.backups.Restore(ctx, path); err != nil {
 		switch {
-		case errors.Is(err, backup.ErrBusy), errors.Is(err, backup.ErrNotEmpty):
-			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, backup.ErrBusy):
+			writeError(w, http.StatusConflict, "a backup is already running")
+		case errors.Is(err, backup.ErrNothingToBackUp):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case r.Context().Err() != nil:
+			// the browser went away; nobody is listening
 		default:
-			s.log.Error("restore failed", "file", in.File, "err", err)
-			writeError(w, http.StatusInternalServerError, "restore failed: "+err.Error())
+			writeError(w, http.StatusInternalServerError, "backup failed: "+err.Error())
 		}
 		return
 	}
-	// The tables were replaced underneath open connections: drop them, and
-	// bring the restored schema up to date if the backup came from an older Rexus.
-	s.store.Pool.Reset()
-	if err := db.Migrate(ctx, s.store.Pool, s.log); err != nil {
-		s.log.Error("migrate after restore", "err", err)
-		writeError(w, http.StatusInternalServerError, "the backup was restored, but updating the database failed: "+err.Error())
+	defer d.Close()
+	f, err := os.Open(d.Path)
+	if err != nil {
+		s.internalError(w, r, err)
 		return
 	}
+	defer f.Close()
 
-	// A backup taken from an empty database restores fine but has no accounts in it:
-	// say so, and stay in setup mode.
-	exists, _ := s.store.OwnerExists(ctx)
-	resp := map[string]any{"ok": true, "owner_exists": exists}
-	if exists {
-		s.clearSetupCode()
+	s.audit(r, a, "backup.download", "backup", d.Name, map[string]any{"size_bytes": d.Size})
+	h := w.Header()
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("Content-Disposition", `attachment; filename="`+d.Name+`"`)
+	h.Set("Content-Length", strconv.FormatInt(d.Size, 10))
+	h.Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, f); err != nil {
+		s.log.Warn("backup download interrupted", "file", d.Name, "err", err)
 	}
-	if checked, kerr := backup.CheckMasterKey(ctx, s.store, s.keys); checked && kerr != nil {
-		resp["warning"] = backup.KeyWarning
-	}
-	s.store.Audit(ctx, store.AuditEntry{Actor: "setup", Action: "backup.restore", TargetType: "backup", TargetID: in.File, IP: ip,
-		Details: map[string]any{"file": in.File, "via": "setup screen"}})
-	s.log.Info("restore finished", "file", in.File)
-	writeJSON(w, http.StatusOK, resp)
 }

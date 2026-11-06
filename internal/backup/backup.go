@@ -1,6 +1,6 @@
-// Package backup takes, rotates and restores database backups: plain
-// pg_dump files in a folder you choose (a local disk, an external drive, a
-// pendrive). Vault secrets inside are still encrypted with REXUS_MASTER_KEY.
+// Package backup makes a copy of the database (pg_dump) for the owner or an admin to download, and restores
+// one into an empty database. Nothing is kept on the server: the copy is made in a temporary file, handed to
+// the person who asked, and deleted. Vault secrets inside are still encrypted with REXUS_MASTER_KEY.
 package backup
 
 import (
@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"rexus/internal/alerts"
 	"rexus/internal/crypto"
 	"rexus/internal/store"
 )
@@ -20,153 +20,55 @@ import (
 var (
 	ErrBusy     = errors.New("a backup or restore is already running")
 	ErrNotEmpty = errors.New("this database already has data — a restore only works into an empty database, so it can never overwrite live data")
-	ErrDisabled = errors.New("backups are switched off (turn them on in Settings → Modules)")
-	// A backup of an empty database is worse than none: after a wipe it would become the
-	// "newest" backup and be the one offered for restore.
+	// A backup of an empty database is worse than none.
 	ErrNothingToBackUp = errors.New("there is nothing to back up yet — Rexus has no accounts or data")
 )
 
 const (
-	DefaultIntervalMinutes = 360 // 6 hours
-	DefaultKeep            = 28
-
-	startDelay  = 30 * time.Second
-	tickEvery   = 10 * time.Second
-	failedRetry = 15 * time.Minute // after a failed attempt, try again sooner than the normal interval
 	dumpTimeout = 30 * time.Minute
 	recordKeep  = 90 * 24 * time.Hour
+	// StaleAfter is how old the last good backup can get before the indicator turns yellow. Backups are taken by
+	// hand, so this is a nudge, not an alarm.
+	StaleAfter = 7 * 24 * time.Hour
+
+	timeLayout = "20060102-150405"
 )
 
-// AllowedIntervals are the choices in the UI, in minutes. 0 means "manual only".
-var AllowedIntervals = []int{0, 15, 60, 360, 1440}
-
-type Options struct {
-	Enabled bool
-	// EnabledFn, when set, is asked every time instead of Enabled, so backups can be switched on and off while
-	// Rexus runs.
-	EnabledFn   func() bool
-	Dir         string
-	DatabaseURL string
-}
-
 type Service struct {
-	st  *store.Store
-	log *slog.Logger
-	al  *alerts.Service // may be nil
-
-	enabled   bool
-	enabledFn func() bool
-	dir       string
-	dbURL     string
+	st    *store.Store
+	log   *slog.Logger
+	dbURL string
 
 	// Names of the PostgreSQL tools (overridden in tests).
 	pgDump, pgRestore string
 
 	mu      sync.Mutex // held while a backup or restore runs
 	running atomic.Bool
-	ctx     context.Context
-	wg      sync.WaitGroup
 }
 
-func New(st *store.Store, log *slog.Logger, al *alerts.Service, o Options) *Service {
-	return &Service{st: st, log: log, al: al, enabled: o.Enabled, enabledFn: o.EnabledFn, dir: o.Dir, dbURL: o.DatabaseURL,
-		pgDump: "pg_dump", pgRestore: "pg_restore", ctx: context.Background()}
+func New(st *store.Store, log *slog.Logger, databaseURL string) *Service {
+	return &Service{st: st, log: log, dbURL: databaseURL, pgDump: "pg_dump", pgRestore: "pg_restore"}
 }
 
-func (s *Service) Enabled() bool {
-	if s.enabledFn != nil {
-		return s.enabledFn()
-	}
-	return s.enabled
-}
-func (s *Service) Dir() string { return s.dir }
+// Running reports whether a backup is being made right now.
+func (s *Service) Running() bool { return s.running.Load() }
 
-func (s *Service) Wait(timeout time.Duration) {
-	done := make(chan struct{})
-	go func() { s.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		s.log.Warn("backup: shutdown timed out with a backup still running")
-	}
+// Dump is a finished backup in a temporary file, waiting to be sent. Close deletes it.
+type Dump struct {
+	Path string
+	Name string // rexus-YYYYMMDD-HHMMSS.dump (UTC)
+	Size int64
 }
 
-// ---- settings ----
+func (d *Dump) Close() { os.Remove(d.Path) }
 
-type Settings struct {
-	IntervalMinutes int `json:"interval_minutes"` // 0 = manual only
-	Keep            int `json:"keep"`             // how many backup files to keep
-}
-
-func ValidateSettings(st Settings) error {
-	okInterval := false
-	for _, v := range AllowedIntervals {
-		if st.IntervalMinutes == v {
-			okInterval = true
-		}
-	}
-	if !okInterval {
-		return errors.New("interval must be 15 minutes, 1 hour, 6 hours, 24 hours or manual only")
-	}
-	if st.Keep < 1 || st.Keep > 500 {
-		return errors.New("keep between 1 and 500 backups")
-	}
-	return nil
-}
-
-func (s *Service) Settings(ctx context.Context) Settings {
-	st := Settings{IntervalMinutes: DefaultIntervalMinutes, Keep: DefaultKeep}
-	var iv int
-	if ok, _ := s.st.GetSetting(ctx, "backup.interval_minutes", &iv); ok && ValidateSettings(Settings{iv, 1}) == nil {
-		st.IntervalMinutes = iv
-	}
-	var keep int
-	if ok, _ := s.st.GetSetting(ctx, "backup.keep", &keep); ok && keep >= 1 && keep <= 500 {
-		st.Keep = keep
-	}
-	return st
-}
-
-func (s *Service) SetSettings(ctx context.Context, st Settings) error {
-	if err := ValidateSettings(st); err != nil {
-		return err
-	}
-	if err := s.st.SetSetting(ctx, "backup.interval_minutes", st.IntervalMinutes); err != nil {
-		return err
-	}
-	return s.st.SetSetting(ctx, "backup.keep", st.Keep)
-}
-
-// ---- running a backup ----
-
-// Run takes a backup now and waits for it. It records the attempt, rotates
-// old files, and sends the "backup failed" alert when backups start failing.
-func (s *Service) Run(ctx context.Context, trigger string, by *string) (*store.BackupRecord, error) {
+// Create makes a backup now and waits for it. The attempt, good or bad, is recorded in the history. The caller
+// sends the file and then calls Close.
+func (s *Service) Create(ctx context.Context, by *string) (*Dump, error) {
 	if !s.mu.TryLock() {
 		return nil, ErrBusy
 	}
 	defer s.mu.Unlock()
-	return s.runLocked(ctx, trigger, by)
-}
-
-// Trigger starts a backup in the background (the "Backup now" button, and the schedule).
-func (s *Service) Trigger(trigger string, by *string) error {
-	if !s.Enabled() {
-		return ErrDisabled
-	}
-	if !s.mu.TryLock() {
-		return ErrBusy
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer s.mu.Unlock()
-		s.runLocked(s.ctx, trigger, by)
-	}()
-	return nil
-}
-
-func (s *Service) runLocked(ctx context.Context, trigger string, by *string) (*store.BackupRecord, error) {
 	if empty, err := s.DatabaseIsEmpty(ctx); err == nil && empty {
 		return nil, ErrNothingToBackUp
 	}
@@ -174,163 +76,72 @@ func (s *Service) runLocked(ctx context.Context, trigger string, by *string) (*s
 	defer s.running.Store(false)
 
 	started := time.Now()
-	prev, _ := s.st.LastBackupAttempt(ctx)
-	name := s.freeName(started)
-	size, err := s.dumpToFile(ctx, name)
+	name := "rexus-" + started.UTC().Format(timeLayout) + ".dump"
+	tmp, err := os.CreateTemp("", "rexus-backup-*.partial") // created 0600: the file holds password hashes and encrypted secrets
+	if err != nil {
+		return nil, fmt.Errorf("can't make a temporary file for the backup: %v", err)
+	}
+	tmp.Close()
+	size, err := s.dump(ctx, tmp.Name())
 	if err != nil && ctx.Err() != nil {
-		return nil, ctx.Err() // shutting down mid-backup: not a failure worth recording
+		os.Remove(tmp.Name())
+		return nil, ctx.Err() // cancelled (the browser went away, or shutting down): not a failure worth recording
 	}
 
 	finished := time.Now()
-	rec := &store.BackupRecord{Trigger: trigger, StartedAt: started, FinishedAt: &finished}
+	rec := &store.BackupRecord{Trigger: "manual", StartedAt: started, FinishedAt: &finished}
 	if err != nil {
+		os.Remove(tmp.Name())
 		msg := clip(err.Error(), 500)
 		rec.Status, rec.Error = "failed", &msg
 	} else {
 		rec.Status, rec.FileName, rec.SizeBytes = "success", &name, &size
 	}
-	if rerr := s.st.AddBackupRecord(context.Background(), rec, by); rerr != nil {
+	if rerr := s.st.AddBackupRecord(context.WithoutCancel(ctx), rec, by); rerr != nil {
 		s.log.Error("backup: record result", "err", rerr)
 	}
-
+	if perr := s.st.PruneBackupRecords(context.WithoutCancel(ctx), recordKeep); perr != nil {
+		s.log.Warn("backup: prune history", "err", perr)
+	}
 	if err != nil {
-		s.log.Error("backup failed", "trigger", trigger, "err", err)
-		// One alert when backups start failing — not one per retry.
-		if s.al != nil && (prev == nil || prev.Status != "failed") {
-			var lastGood *time.Time
-			if g, gerr := s.st.LastBackupSuccess(context.Background()); gerr == nil {
-				lastGood = &g.StartedAt
-			}
-			s.al.BackupFailed(*rec.Error, lastGood)
-		}
-		return rec, err
+		s.log.Error("backup failed", "err", err)
+		return nil, err
 	}
-
-	s.log.Info("backup done", "file", name, "bytes", size, "trigger", trigger)
-	if removed, rerr := s.Rotate(s.Settings(ctx).Keep); rerr != nil {
-		s.log.Warn("backup: rotation problem", "err", rerr)
-	} else if len(removed) > 0 {
-		s.log.Info("backup: removed old backups", "count", len(removed))
-	}
-	return rec, nil
-}
-
-// ---- schedule ----
-
-// Start runs scheduled backups until ctx is cancelled. A backup is due when
-// the interval has passed since the last attempt; after a failure it retries
-// within 15 minutes rather than waiting a full interval.
-func (s *Service) Start(ctx context.Context) {
-	s.ctx = ctx
-	if s.enabledFn == nil && !s.enabled {
-		return // switched off for good (the command line): no schedule at all
-	}
-	if s.Enabled() {
-		s.cleanPartials()
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(tickEvery)
-		defer ticker.Stop()
-		begin := time.Now().Add(startDelay)
-		lastPrune := time.Now()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if time.Now().Before(begin) || !s.Enabled() {
-					continue
-				}
-				s.tick(ctx)
-				if time.Since(lastPrune) > time.Hour {
-					lastPrune = time.Now()
-					if err := s.st.PruneBackupRecords(ctx, recordKeep); err != nil {
-						s.log.Error("backup: prune history", "err", err)
-					}
-				}
-			}
-		}
-	}()
-	s.log.Info("backup scheduler started", "folder", s.dir, "enabled", s.Enabled())
-}
-
-func (s *Service) tick(ctx context.Context) {
-	set := s.Settings(ctx)
-	if set.IntervalMinutes == 0 {
-		return
-	}
-	last, err := s.st.LastBackupAttempt(ctx)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		s.log.Error("backup: read history", "err", err)
-		return
-	}
-	if due, _ := nextRun(last, set.IntervalMinutes, time.Now()); !due {
-		return
-	}
-	// A brand-new or freshly wiped instance has nothing worth saving yet.
-	if empty, err := s.DatabaseIsEmpty(ctx); err != nil || empty {
-		return
-	}
-	if err := s.Trigger("scheduled", nil); err != nil && !errors.Is(err, ErrBusy) {
-		s.log.Error("backup: start scheduled backup", "err", err)
-	}
-}
-
-// nextRun says whether a scheduled backup is due, and when the next one is.
-func nextRun(last *store.BackupRecord, intervalMin int, now time.Time) (due bool, at time.Time) {
-	if intervalMin == 0 {
-		return false, time.Time{}
-	}
-	if last == nil {
-		return true, now
-	}
-	wait := time.Duration(intervalMin) * time.Minute
-	if last.Status == "failed" && wait > failedRetry {
-		wait = failedRetry
-	}
-	at = last.StartedAt.Add(wait)
-	return !now.Before(at), at
+	s.log.Info("backup made", "file", name, "bytes", size)
+	return &Dump{Path: tmp.Name(), Name: name, Size: size}, nil
 }
 
 // ---- status ----
 
 type Status struct {
 	Enabled       bool       `json:"enabled"`
-	Dir           string     `json:"dir"`
-	Settings      Settings   `json:"settings"`
 	Running       bool       `json:"running"`
 	State         string     `json:"state"` // ok | stale | failed | none
 	LastSuccessAt *time.Time `json:"last_success_at"`
 	LastAttemptAt *time.Time `json:"last_attempt_at"`
 	LastError     *string    `json:"last_error"`
-	NextRunAt     *time.Time `json:"next_run_at"`
-	Files         int        `json:"files"`
 }
 
 // State is the traffic light shown in the top bar:
 //
 //	failed — the latest attempt failed (red)
-//	none   — no backup has ever run (red)
-//	stale  — the last good backup is older than twice the interval (yellow)
+//	none   — no backup has ever been made (red)
+//	stale  — the last good backup is older than a week (yellow)
 //	ok     — everything is fine (green)
-//
-// A "manual only" schedule is never stale.
-func State(now time.Time, intervalMin int, lastSuccess *time.Time, lastAttemptFailed, anyAttempt bool) string {
+func State(now time.Time, lastSuccess *time.Time, lastAttemptFailed, anyAttempt bool) string {
 	switch {
 	case lastAttemptFailed:
 		return "failed"
 	case !anyAttempt:
 		return "none"
-	case intervalMin > 0 && lastSuccess != nil && now.Sub(*lastSuccess) > 2*time.Duration(intervalMin)*time.Minute:
+	case lastSuccess != nil && now.Sub(*lastSuccess) > StaleAfter:
 		return "stale"
 	}
 	return "ok"
 }
 
 func (s *Service) Status(ctx context.Context) (*Status, error) {
-	st := &Status{Enabled: s.Enabled(), Dir: s.dir, Settings: s.Settings(ctx), Running: s.running.Load()}
+	st := &Status{Enabled: true, Running: s.running.Load()}
 	last, err := s.st.LastBackupAttempt(ctx)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
@@ -348,18 +159,7 @@ func (s *Service) Status(ctx context.Context) (*Status, error) {
 	if good != nil {
 		st.LastSuccessAt = &good.StartedAt
 	}
-	st.State = State(time.Now(), st.Settings.IntervalMinutes, st.LastSuccessAt, last != nil && last.Status == "failed", last != nil)
-	if s.Enabled() {
-		if _, at := nextRun(last, st.Settings.IntervalMinutes, time.Now()); !at.IsZero() {
-			if at.Before(time.Now()) {
-				at = time.Now()
-			}
-			st.NextRunAt = &at
-		}
-	}
-	if files, err := s.Files(); err == nil {
-		st.Files = len(files)
-	}
+	st.State = State(time.Now(), st.LastSuccessAt, last != nil && last.Status == "failed", last != nil)
 	return st, nil
 }
 

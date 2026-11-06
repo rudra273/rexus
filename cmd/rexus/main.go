@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -45,6 +46,8 @@ Usage:
   rexus owner transfer --to EMAIL   Hand ownership to another active user
   rexus settings show               Show the company name, public URL and module switches in use, and where each comes from
   rexus settings reset              Clear settings saved from the web UI (back to the .env values)
+  rexus backup --out FILE           Write a backup of the database to a file (use cron to schedule it)
+  rexus restore --file FILE         Load a backup into an empty database
   rexus migrate                    Run database migrations and exit
   rexus keygen                      Generate a new REXUS_MASTER_KEY
   rexus version                     Print version
@@ -161,7 +164,7 @@ func cmdServe() error {
 	}
 
 	al := newAlerts(cfg, as, st, keys, log)
-	bk := backup.New(st, log, al, backup.Options{EnabledFn: func() bool { return as.Get().BackupEnabled }, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
+	bk := backup.New(st, log, cfg.DatabaseURL)
 	engine := scheduler.New(st, keys, log, func() bool { return as.Get().ModuleScheduler }, al)
 	srv := server.New(cfg, as, st, keys, engine, al, bk, log, version)
 	if err := srv.InitSetup(ctx); err != nil {
@@ -172,7 +175,6 @@ func cmdServe() error {
 	engine.Start(engineCtx)
 	go as.Watch(engineCtx, 30*time.Second) // picks up a change made from the command line
 	al.Start(engineCtx)
-	bk.Start(engineCtx)
 
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -203,7 +205,6 @@ func cmdServe() error {
 	httpSrv.Shutdown(shutdownCtx)
 	stopEngine()
 	engine.Wait(30 * time.Second)
-	bk.Wait(30 * time.Second)
 	al.Wait(20 * time.Second)
 	return nil
 }
@@ -423,8 +424,8 @@ func newAlerts(cfg *config.Config, as *appsettings.Service, st *store.Store, key
 func settingsDefaults(cfg *config.Config) appsettings.Values {
 	return appsettings.Values{
 		CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL,
-		ModuleVault: cfg.ModuleVault, ModuleScheduler: cfg.ModuleScheduler, BackupEnabled: cfg.BackupEnabled,
-		BackupDirSet: cfg.BackupDir != "",
+		ModuleVault: cfg.ModuleVault, ModuleScheduler: cfg.ModuleScheduler,
+		BackupEnabled: true, // the Backups page is just a download, so it is on unless someone switches it off
 	}
 }
 
@@ -533,16 +534,24 @@ func dbLabel(dbURL string) string {
 	return u.Host + u.Path
 }
 
+// cmdBackup writes a backup of the database to a file: rexus backup --out <file>. It is the way to schedule
+// backups yourself (cron, a systemd timer), since the web page only downloads.
 func cmdBackup(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: rexus backup now | rexus backup list")
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	out := fs.String("out", "", "file to write the backup to (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return errors.New("usage: rexus backup --out <file>, e.g. rexus backup --out /backups/rexus.dump")
+	}
+	path, err := filepath.Abs(*out)
+	if err != nil {
+		return err
 	}
 	cfg, log, err := setup()
 	if err != nil {
 		return err
-	}
-	if cfg.BackupDir == "" {
-		return errors.New("REXUS_BACKUP_DIR is not set — it is the folder backups are written to")
 	}
 	ctx := context.Background()
 	pool, err := connect(ctx, cfg, log)
@@ -550,40 +559,37 @@ func cmdBackup(args []string) error {
 		return err
 	}
 	defer pool.Close()
-	keys, err := crypto.NewKeyring(cfg.MasterKey)
+	bk := backup.New(store.New(pool), log, cfg.DatabaseURL)
+
+	fmt.Println("Backing up…")
+	d, err := bk.Create(ctx, nil)
 	if err != nil {
 		return err
 	}
-	st := store.New(pool)
-	as := loadSettings(ctx, cfg, st, log)
-	al := newAlerts(cfg, as, st, keys, log)
-	bk := backup.New(st, log, al, backup.Options{Enabled: true, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
-
-	switch args[0] {
-	case "now":
-		fmt.Println("Backing up…")
-		rec, err := bk.Run(ctx, "manual", nil)
-		al.Wait(20 * time.Second) // let a "backup failed" alert go out
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Done: %s (%s)\nFolder: %s\n", *rec.FileName, humanSize(*rec.SizeBytes), cfg.BackupDir)
-		return nil
-	case "list":
-		files, err := bk.Files()
-		if err != nil {
-			return err
-		}
-		if len(files) == 0 {
-			fmt.Println("No backups in", cfg.BackupDir)
-			return nil
-		}
-		for _, f := range files {
-			fmt.Printf("%s  %9s  %s\n", f.CreatedAt.Format("2006-01-02 15:04 UTC"), humanSize(f.SizeBytes), f.Name)
-		}
-		return nil
+	defer d.Close()
+	if err := copyFile(d.Path, path); err != nil {
+		return fmt.Errorf("can't write %s: %w", path, err)
 	}
-	return fmt.Errorf("unknown backup command %q (use now or list)", args[0])
+	fmt.Printf("Done: %s (%s)\n", path, humanSize(d.Size))
+	return nil
+}
+
+// copyFile copies src to dst (created private, 0600: a backup holds password hashes and encrypted secrets).
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func cmdRestore(args []string) error {
@@ -594,7 +600,7 @@ func cmdRestore(args []string) error {
 		return err
 	}
 	if *file == "" {
-		return errors.New("--file is required, e.g. rexus restore --file /backups/rexus-20261105-120000.dump")
+		return errors.New("--file is required, e.g. rexus restore --file ./rexus-20261105-120000.dump")
 	}
 	path, err := filepath.Abs(*file)
 	if err != nil {
@@ -619,7 +625,7 @@ func cmdRestore(args []string) error {
 		return err
 	}
 	st := store.New(pool)
-	bk := backup.New(st, log, nil, backup.Options{Dir: filepath.Dir(path), DatabaseURL: cfg.DatabaseURL})
+	bk := backup.New(st, log, cfg.DatabaseURL)
 
 	empty, err := bk.DatabaseIsEmpty(ctx)
 	if err != nil {

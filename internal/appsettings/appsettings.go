@@ -6,8 +6,7 @@
 //
 // Only settings that cannot lock anyone out belong here: the company name, the public URL and the three
 // module switches (Vault, Scheduler, Backups). Anything needed before the database is reachable
-// (DATABASE_URL, REXUS_MASTER_KEY, REXUS_PORT, REXUS_ENV), the backup folder, and the security policy, stay
-// in the environment.
+// (DATABASE_URL, REXUS_MASTER_KEY, REXUS_PORT, REXUS_ENV) and the security policy stay in the environment.
 package appsettings
 
 import (
@@ -34,10 +33,6 @@ type Values struct {
 	ModuleVault     bool // secrets, environments, and the deploy tokens that read them
 	ModuleScheduler bool // user-defined jobs (health checks always run)
 	BackupEnabled   bool // scheduled and manual backups
-
-	// BackupDirSet says whether REXUS_BACKUP_DIR is configured. It can't be changed here (it is a folder that is
-	// mounted into the container), and backups can only be turned on when it is set.
-	BackupDirSet bool
 }
 
 // SecureCookies reports whether session cookies should carry the Secure flag. It follows the public URL.
@@ -171,9 +166,6 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 		next.ModuleScheduler = p.ModuleScheduler
 	}
 	if p.BackupEnabled != nil {
-		if *p.BackupEnabled && !s.defaults.BackupDirSet {
-			return Values{}, invalid("backups need a folder first: set REXUS_BACKUP_DIR in .env and restart Rexus")
-		}
 		next.BackupEnabled = p.BackupEnabled
 	}
 	if p.CompanyName != nil {
@@ -245,15 +237,12 @@ func (s *Service) apply() Values {
 	return v
 }
 
-// sanitize drops saved values that don't validate (or no longer make sense: backups saved as on, but the
-// backup folder has since been removed from .env).
+// sanitize drops saved values that don't validate.
 func (s *Service) sanitize(o overrides) overrides {
 	var out overrides
 	out.ModuleVault = o.ModuleVault
 	out.ModuleScheduler = o.ModuleScheduler
-	if o.BackupEnabled != nil && (!*o.BackupEnabled || s.defaults.BackupDirSet) {
-		out.BackupEnabled = o.BackupEnabled
-	}
+	out.BackupEnabled = o.BackupEnabled
 	if o.CompanyName != nil {
 		if v, err := ValidateCompanyName(*o.CompanyName); err == nil {
 			out.CompanyName = &v

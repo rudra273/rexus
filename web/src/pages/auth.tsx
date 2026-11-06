@@ -3,7 +3,6 @@ import QRCode from 'qrcode'
 import { api, type SessionResp } from '../api'
 import { useAuth } from '../auth'
 import { AuthShell, Button, ErrorBox, Field, Input } from '../ui'
-import { RestoreFromBackup } from './backups'
 
 function useSubmit() {
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +66,6 @@ export function SetupPage() {
           {busy ? 'Creating…' : 'Create owner account'}
         </Button>
       </form>
-      <RestoreFromBackup code={code} />
     </AuthShell>
   )
 }
