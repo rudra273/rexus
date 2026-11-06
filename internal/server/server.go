@@ -151,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.authed(s.handleUpdateSettings)) // owner only
 
 	// Dashboard layout and density, shared by everyone on this Rexus (anyone reads, owner / admin changes)
+	mux.HandleFunc("GET /api/dashboard/locations", s.authed(s.handleDestinationLocations))
 	mux.HandleFunc("GET /api/dashboard/settings", s.authed(s.handleGetDashboardSettings))
 	mux.HandleFunc("PUT /api/dashboard/settings", s.authed(s.handlePutDashboardSettings))
 

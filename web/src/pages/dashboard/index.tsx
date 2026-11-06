@@ -14,6 +14,7 @@ import { Stat, HealthTile } from './tiles'
 import { LiveStatus, RangeSwitch } from './header'
 import { toIncidents, IncidentsPanel } from './incidents'
 import { OperationsPanel, failingChannels, alertsProblem } from './operations'
+import { RegionsPanel } from './regions'
 import { TvBoard } from './tv_board'
 import { DashboardSkeleton } from './skeleton'
 
@@ -321,6 +322,7 @@ export function DashboardPage() {
             alerts={admin ? alertsStatus : undefined}
             backup={showBackup ? backup : undefined}
           />
+          <RegionsPanel checks={allChecks} jobs={meta?.modules.scheduler && jobs.data ? inScope(jobs.data) : null} />
         </aside>
       </div>
     </>
