@@ -1,6 +1,30 @@
-import { useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react'
 import type { SeriesBucket } from '../api'
 import { cx, fmtTime } from '../ui'
+
+/**
+ * Closes a hover tooltip as soon as the pointer is anywhere outside `ref`, or the page scrolls or loses focus.
+ * `mouseleave` alone isn't enough: browsers skip it when the pointer jumps straight from one chart into another,
+ * which left tooltips stuck open.
+ */
+function useHoverGuard(ref: RefObject<HTMLElement | null>, active: boolean, clear: () => void) {
+  useEffect(() => {
+    if (!active) return
+    const onMove = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) clear()
+    }
+    document.addEventListener('pointermove', onMove, true)
+    document.documentElement.addEventListener('mouseleave', clear)
+    window.addEventListener('scroll', clear, true)
+    window.addEventListener('blur', clear)
+    return () => {
+      document.removeEventListener('pointermove', onMove, true)
+      document.documentElement.removeEventListener('mouseleave', clear)
+      window.removeEventListener('scroll', clear, true)
+      window.removeEventListener('blur', clear)
+    }
+  }, [ref, active, clear])
+}
 
 /** One time slot of an uptime bar. */
 interface Slot {
@@ -84,15 +108,17 @@ export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', 
   const data = toSlots(buckets, windowSeconds, slots)
   const sinceMs = since ? new Date(since).getTime() : null
   const [hover, setHover] = useState<number | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  useHoverGuard(ref, hover != null, useCallback(() => setHover(null), []))
   const h = hover != null ? data[hover] : null
   const hs = h ? slotState(h, sinceMs) : null
   const frac = hover != null ? (hover + 0.5) / data.length : 0
   return (
-    <div className="relative" onMouseLeave={() => setHover(null)}>
+    <div ref={ref} className="relative" onMouseLeave={() => setHover(null)}>
       <div className={cx('flex gap-[2px]', paused && 'opacity-50')} role="img" aria-label={`Uptime over the last ${Math.round(windowSeconds / 3600)} hours`}>
         {data.map((s, i) => (
           <div
-            key={s.start}
+            key={i}
             className={cx('min-w-0 flex-1 rounded-[3px] transition-opacity', height, hover != null && hover !== i && 'opacity-60')}
             style={{ background: slotState(s, sinceMs).color }}
             onMouseEnter={() => setHover(i)}
@@ -132,6 +158,7 @@ export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', 
 export function Sparkline({ buckets, windowSeconds, bucketSeconds, height = 44 }: { buckets: SeriesBucket[]; windowSeconds: number; bucketSeconds: number; height?: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<number | null>(null) // index into points
+  useHoverGuard(ref, hover != null, useCallback(() => setHover(null), []))
   const W = 300
   const H = height
   const end = Date.now()
