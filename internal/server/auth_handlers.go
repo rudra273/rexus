@@ -379,6 +379,32 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": a.user, "next": nextStep(a)})
 }
 
+// handleUpdateProfile lets anyone change their own display name. The email is the sign-in identity, so it stays.
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	name, err := validateName(in.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.store.SetName(r.Context(), a.user.ID, name); err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	u, err := s.store.UserByID(r.Context(), a.user.ID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	s.audit(r, a, "user.rename", "user", a.user.ID, map[string]any{"name": name})
+	writeJSON(w, http.StatusOK, map[string]any{"user": u})
+}
+
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	if err := s.store.RevokeSession(r.Context(), a.sess.ID); err != nil {
 		s.internalError(w, r, err)

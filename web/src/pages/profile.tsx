@@ -14,23 +14,17 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export function ProfilePage() {
-  const { user, setSession } = useAuth()
+  const { user } = useAuth()
   const [params, setParams] = useSearchParams()
   const requested = params.get('tab')
   const tab: Tab = TABS.some((t) => t.id === requested) ? (requested as Tab) : 'account'
 
   if (!user) return null
 
-  const logout = async () => {
-    await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-    setSession(null)
-  }
-
   return (
     <>
       <PageHeader
         title="Profile"
-        actions={<Button variant="secondary" onClick={logout}>Sign out</Button>}
       />
       <Tabs tabs={TABS} value={tab} onChange={(id) => setParams(id === 'account' ? {} : { tab: id }, { replace: true })} label="Profile sections" />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="max-w-2xl">
@@ -51,10 +45,58 @@ function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
   )
 }
 
+function NameRow({ user }: { user: User }) {
+  const { setSession } = useAuth()
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(user.name)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await api<{ user: User }>('/api/auth/profile', { method: 'PATCH', body: { name } })
+      setSession({ user: r.user, next: 'ok' })
+      setEditing(false)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
+        <span className="text-zinc-400">Name</span>
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="min-w-0 truncate text-zinc-200">{user.name || '—'}</span>
+          <button type="button" onClick={() => { setName(user.name); setEditing(true) }} className="shrink-0 text-emerald-400 hover:text-emerald-300">
+            Edit
+          </button>
+        </span>
+      </div>
+    )
+  }
+  return (
+    <form onSubmit={save} className="space-y-2 px-4 py-3 text-sm">
+      <div className="flex items-center gap-3">
+        <label htmlFor="p-name" className="w-16 shrink-0 text-zinc-400">Name</label>
+        <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} autoFocus required />
+        <Button type="submit" disabled={busy || !name.trim() || name.trim() === user.name}>{busy ? 'Saving…' : 'Save'}</Button>
+        <Button type="button" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+      </div>
+      <ErrorBox error={error} />
+    </form>
+  )
+}
+
 function AccountTab({ user }: { user: User }) {
   return (
     <Card className="divide-y divide-zinc-800">
-      <Row label="Name" value={user.name || '—'} />
+      <NameRow user={user} />
       <Row label="Email" value={user.email} />
       <Row label="Role" value={<Badge tone="green">{user.role}</Badge>} />
       <Row label="Last sign-in" value={fmtTime(user.last_login_at)} />

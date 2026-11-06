@@ -95,6 +95,12 @@ func (s *Store) SetPassword(ctx context.Context, userID, hash string) error {
 	return err
 }
 
+// SetName changes a user's display name.
+func (s *Store) SetName(ctx context.Context, userID, name string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE users SET name = $2, updated_at = now() WHERE id = $1`, userID, name)
+	return err
+}
+
 func (s *Store) SetTOTPPending(ctx context.Context, userID string, enc []byte) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE users SET totp_pending_secret = $2, updated_at = now() WHERE id = $1`, userID, enc)
 	return err

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
-import { isAdmin } from './api'
+import { api, isAdmin } from './api'
 import { useAuth } from './auth'
 import { NavIcon, type IconName } from './icons'
+import { ConfirmModal } from './pages/bulk_secrets'
 import { LoginPage, SetupPage, TwoFactorEnrollPage, TwoFactorVerifyPage } from './pages/auth'
 import { CheckDetailPage, CheckFormPage } from './pages/health'
 import { JobDetailPage, JobFormPage } from './pages/jobs'
@@ -125,7 +126,8 @@ function SideLink({ item }: { item: NavItem }) {
 }
 
 function Layout() {
-  const { meta, user } = useAuth()
+  const { meta, user, setSession } = useAuth()
+  const [signingOut, setSigningOut] = useState(false)
   const { pathname } = useLocation()
   const [drawer, setDrawer] = useState(false)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -194,6 +196,19 @@ function Layout() {
               <span className="block truncate text-xs capitalize text-zinc-500">{user?.role}</span>
             </span>
           </NavLink>
+          <button
+            type="button"
+            onClick={() => setSigningOut(true)}
+            title="Sign out"
+            aria-label="Sign out"
+            className="shrink-0 rounded-md p-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <path d="M16 17l5-5-5-5" />
+              <path d="M21 12H9" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -234,7 +249,21 @@ function Layout() {
         </div>
       )}
 
-      <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
+      {signingOut && (
+        <ConfirmModal
+          title="Sign out?"
+          confirmLabel="Sign out"
+          onClose={() => setSigningOut(false)}
+          onConfirm={async () => {
+            await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
+            setSession(null)
+          }}
+        >
+          You will need to sign in again to use Rexus on this device.
+        </ConfirmModal>
+      )}
+
+      <main className="min-w-0 flex-1 px-4 py-5 md:px-8 md:py-5">
         <div className="mx-auto max-w-6xl">
           <Outlet />
         </div>

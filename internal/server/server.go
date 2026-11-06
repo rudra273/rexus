@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Fully authenticated
 	mux.HandleFunc("POST /api/auth/2fa/disable", s.authed(s.handle2FADisable))
+	mux.HandleFunc("PATCH /api/auth/profile", s.authed(s.handleUpdateProfile))
 	mux.HandleFunc("POST /api/auth/password", s.authed(s.handleChangePassword))
 	mux.HandleFunc("POST /api/auth/logout-all", s.authed(s.handleLogoutAll))
 	mux.HandleFunc("GET /api/settings", s.authed(s.handleSettings))
