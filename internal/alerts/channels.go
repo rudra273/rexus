@@ -6,7 +6,9 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Channel types.
@@ -20,15 +22,22 @@ const (
 // Config holds the settings of one channel; only the fields for its type are
 // used. It is stored encrypted — bot tokens and webhook URLs are secrets.
 type Config struct {
-	BotToken   string   `json:"bot_token,omitempty"`   // telegram
-	ChatID     string   `json:"chat_id,omitempty"`     // telegram
-	WebhookURL string   `json:"webhook_url,omitempty"` // discord, slack
-	To         []string `json:"to,omitempty"`          // email
+	BotToken      string          `json:"bot_token,omitempty"`       // telegram
+	ChatID        string          `json:"chat_id,omitempty"`         // telegram
+	WebhookURL    string          `json:"webhook_url,omitempty"`     // discord, slack
+	To            []string        `json:"to,omitempty"`              // email
+	CommandChatID *string         `json:"command_chat_id,omitempty"` // Telegram numeric chat ID; empty disables replies
+	Digest        *DigestSchedule `json:"digest,omitempty"`          // Telegram daily digest; empty time disables it
+}
+
+type DigestSchedule struct {
+	Time     string `json:"time"`
+	Timezone string `json:"timezone"`
 }
 
 // IsEmpty reports whether no field is set (used to tell "keep the old config" from "replace it").
 func (c *Config) IsEmpty() bool {
-	return c.BotToken == "" && c.ChatID == "" && c.WebhookURL == "" && len(c.To) == 0
+	return c.BotToken == "" && c.ChatID == "" && c.WebhookURL == "" && len(c.To) == 0 && c.CommandChatID == nil && c.Digest == nil
 }
 
 var (
@@ -48,6 +57,9 @@ func (c *Config) Validate(typ string, smtpConfigured bool) error {
 	c.BotToken = strings.TrimSpace(c.BotToken)
 	c.ChatID = strings.TrimSpace(c.ChatID)
 	c.WebhookURL = strings.TrimSpace(c.WebhookURL)
+	if typ != TypeTelegram {
+		c.CommandChatID, c.Digest = nil, nil
+	}
 
 	switch typ {
 	case TypeTelegram:
@@ -56,6 +68,26 @@ func (c *Config) Validate(typ string, smtpConfigured bool) error {
 		}
 		if !telegramChatRe.MatchString(c.ChatID) {
 			return errors.New("chat ID must be a number (e.g. -1001234567890 for a group) or @channelname")
+		}
+		if c.CommandChatID != nil {
+			raw := strings.TrimSpace(*c.CommandChatID)
+			if raw != "" {
+				id, err := strconv.ParseInt(raw, 10, 64)
+				if err != nil || id == 0 || strconv.FormatInt(id, 10) != raw {
+					return errors.New("command chat ID must be a numeric Telegram chat ID")
+				}
+			}
+			c.CommandChatID = &raw
+		}
+		if c.Digest != nil && c.Digest.Time != "" {
+			clock, err := time.Parse("15:04", c.Digest.Time)
+			if err != nil || clock.Format("15:04") != c.Digest.Time {
+				return errors.New("digest time must use HH:MM")
+			}
+			c.Digest.Timezone = strings.TrimSpace(c.Digest.Timezone)
+			if _, err := time.LoadLocation(c.Digest.Timezone); err != nil || c.Digest.Timezone == "" || c.Digest.Timezone == "Local" {
+				return errors.New("enter a timezone such as Asia/Kolkata or UTC")
+			}
 		}
 		c.WebhookURL, c.To = "", nil
 	case TypeDiscord:

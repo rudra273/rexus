@@ -295,6 +295,8 @@ export interface AlertChannel {
   enabled: boolean
   summary: string
   created_at: string
+  command_chat_id?: string
+  digest?: { time: string; timezone: string }
 }
 
 export interface AlertEventState {

@@ -175,7 +175,10 @@ func cmdServe() error {
 	engineCtx, stopEngine := context.WithCancel(context.Background())
 	engine.Start(engineCtx)
 	go as.Watch(engineCtx, 30*time.Second) // picks up a change made from the command line
-	al.Start(engineCtx)
+	al.Start(engineCtx, func() alerts.SummaryModules {
+		v := as.Get()
+		return alerts.SummaryModules{Jobs: v.ModuleScheduler, Vault: v.ModuleVault, Backups: v.BackupEnabled}
+	})
 
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),

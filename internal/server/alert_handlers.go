@@ -18,12 +18,14 @@ const maxChannels = 20
 // channelView is a channel as the UI sees it: the settings are summarised,
 // never returned (bot tokens and webhook URLs are secrets).
 type channelView struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	Name      string    `json:"name"`
-	Enabled   bool      `json:"enabled"`
-	Summary   string    `json:"summary"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string                 `json:"id"`
+	Type          string                 `json:"type"`
+	Name          string                 `json:"name"`
+	Enabled       bool                   `json:"enabled"`
+	Summary       string                 `json:"summary"`
+	CreatedAt     time.Time              `json:"created_at"`
+	CommandChatID *string                `json:"command_chat_id,omitempty"`
+	Digest        *alerts.DigestSchedule `json:"digest,omitempty"`
 }
 
 func (s *Server) channelView(ch *store.AlertChannel) channelView {
@@ -32,6 +34,7 @@ func (s *Server) channelView(ch *store.AlertChannel) channelView {
 		v.Summary = "unreadable — was REXUS_MASTER_KEY changed?"
 	} else {
 		v.Summary = cfg.Summary(ch.Type)
+		v.CommandChatID, v.Digest = cfg.CommandChatID, cfg.Digest
 	}
 	return v
 }
@@ -173,6 +176,12 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request, a *
 		}
 		if len(cfg.To) == 0 {
 			cfg.To = old.To
+		}
+		if cfg.CommandChatID == nil {
+			cfg.CommandChatID = old.CommandChatID
+		}
+		if cfg.Digest == nil {
+			cfg.Digest = old.Digest
 		}
 		if err := cfg.Validate(ch.Type, s.alerts.SMTPConfigured()); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

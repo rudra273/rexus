@@ -17,7 +17,8 @@ const (
 // Start runs the expiry reminders (secrets and SSL certificates) shortly
 // after boot and then every hour, until ctx is cancelled. Each reminder goes
 // to each channel once, so restarts and the hourly loop never repeat it.
-func (s *Service) Start(ctx context.Context) {
+func (s *Service) Start(ctx context.Context, modules func() SummaryModules) {
+	s.startTelegram(ctx, modules)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

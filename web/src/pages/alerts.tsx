@@ -179,6 +179,8 @@ function ChannelRow({ channel: c, onEdit, onChanged }: { channel: AlertChannel; 
             {!c.enabled && <Badge>off</Badge>}
           </div>
           <div className="mt-0.5 truncate text-xs text-zinc-500 mono">{c.summary}</div>
+          {c.digest?.time && <div className="mt-1 text-xs text-zinc-400">Daily digest · {c.digest.time} · {c.digest.timezone}</div>}
+          {c.command_chat_id && <div className="mt-1 text-xs text-zinc-400">/status enabled for chat {c.command_chat_id}</div>}
         </div>
         <div className="flex items-center gap-4">
           <button className={link} onClick={runTest} disabled={test === 'sending'}>{test === 'sending' ? 'Sending…' : 'Send test'}</button>
@@ -203,6 +205,10 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
   const [enabled, setEnabled] = useState(existing?.enabled ?? true)
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState(existing?.type === 'telegram' ? existing.summary.replace('chat ', '') : '')
+  const [commandChatId, setCommandChatId] = useState(existing?.command_chat_id ?? '')
+  const [digestEnabled, setDigestEnabled] = useState(!!existing?.digest?.time)
+  const [digestTime, setDigestTime] = useState(existing?.digest?.time || '09:00')
+  const [digestTimezone, setDigestTimezone] = useState(existing?.digest?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
   const [webhook, setWebhook] = useState('')
   const [to, setTo] = useState(existing?.type === 'email' ? existing.summary.split(', ').join('\n') : '')
   const [error, setError] = useState<string | null>(null)
@@ -218,6 +224,8 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
     if (type === 'telegram') {
       if (botToken) config.bot_token = botToken
       config.chat_id = chatId
+      config.command_chat_id = commandChatId
+      config.digest = { time: digestEnabled ? digestTime : '', timezone: digestTimezone }
     } else if (type === 'email') {
       config.to = to.split(/[\s,;]+/).filter(Boolean)
     } else if (webhook) {
@@ -265,6 +273,28 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
             <Field label="Chat ID">
               <Input value={chatId} onChange={(e) => setChatId(e.target.value)} className="mono" required placeholder="-1001234567890" />
             </Field>
+            <Field label="Chat ID for /status" hint="Use a private team group, DM, or channel whose members can see workspace status. Leave blank to turn replies off.">
+              <Input value={commandChatId} onChange={(e) => setCommandChatId(e.target.value)} className="mono" placeholder="-1001234567890" />
+            </Field>
+            {/^-?[1-9]\d*$/.test(chatId.trim()) && (
+              <button type="button" className="text-xs text-emerald-400 hover:underline" onClick={() => setCommandChatId(chatId.trim())}>
+                Use the alert chat for /status
+              </button>
+            )}
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={digestEnabled} onChange={(e) => setDigestEnabled(e.target.checked)} className="accent-emerald-500" />
+              Send a daily digest to the alert chat
+            </label>
+            {digestEnabled && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Digest time">
+                  <Input type="time" value={digestTime} onChange={(e) => setDigestTime(e.target.value)} required />
+                </Field>
+                <Field label="Timezone">
+                  <Input value={digestTimezone} onChange={(e) => setDigestTimezone(e.target.value)} placeholder="Asia/Kolkata" required />
+                </Field>
+              </div>
+            )}
           </>
         )}
         {(type === 'discord' || type === 'slack') && (
