@@ -16,7 +16,6 @@ import (
 
 const (
 	sessionCookie  = "rexus_session"
-	sessionTTL     = 8 * time.Hour    // sliding: extended on activity
 	partialTTL     = 10 * time.Minute // password OK, 2FA still pending
 	touchThreshold = 5 * time.Minute
 )
@@ -82,7 +81,7 @@ func (s *Server) authed(h authHandler) http.HandlerFunc {
 			return
 		}
 		if time.Since(a.sess.LastSeenAt) > touchThreshold {
-			s.store.TouchSession(r.Context(), a.sess.ID, time.Now().Add(sessionTTL))
+			s.store.TouchSession(r.Context(), a.sess.ID, time.Now().Add(s.settings.Get().SessionTTL()))
 		}
 		r = withReqState(r, a)
 		// Only the owner sees the owner's email; for everyone else it is masked.
@@ -155,7 +154,7 @@ func nextStep(a *authCtx) string {
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.User) (string, string, error) {
 	token := crypto.RandomToken(32)
 	verified := !s.needsMFA(u)
-	ttl := sessionTTL
+	ttl := s.settings.Get().SessionTTL() // sliding: extended on activity
 	if !verified {
 		ttl = partialTTL
 	}
@@ -203,7 +202,7 @@ func (s *Server) completeLogin(ctx context.Context, a *authCtx) error {
 	if err := s.store.MarkSessionMFA(ctx, a.sess.ID); err != nil {
 		return err
 	}
-	if err := s.store.TouchSession(ctx, a.sess.ID, time.Now().Add(sessionTTL)); err != nil {
+	if err := s.store.TouchSession(ctx, a.sess.ID, time.Now().Add(s.settings.Get().SessionTTL())); err != nil {
 		return err
 	}
 	a.sess.MFAVerified = true
@@ -225,6 +224,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"setup_required": !exists,
 		"two_fa_mode":    s.cfg.TwoFAMode,
 		"backup_enabled": s.settings.Get().BackupEnabled,
+		"look":           s.look(),
 		"modules": map[string]bool{
 			"scheduler": s.settings.Get().ModuleScheduler,
 			"vault":     s.settings.Get().ModuleVault,

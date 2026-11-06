@@ -425,6 +425,7 @@ func settingsDefaults(cfg *config.Config) appsettings.Values {
 	return appsettings.Values{
 		CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL,
 		ModuleVault: cfg.ModuleVault, ModuleScheduler: cfg.ModuleScheduler,
+		DateFormat: "system", SessionHours: appsettings.DefaultSessionHours,
 		BackupEnabled: true, // the Backups page is just a download, so it is on unless someone switches it off
 	}
 }

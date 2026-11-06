@@ -162,7 +162,7 @@ function Layout() {
   const sidebar = (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2.5 px-4 py-4">
-        <img src="/favicon.svg" alt="" className="h-7 w-7" />
+        <img src={meta?.look?.logo_url || '/favicon.svg'} alt="" className="h-7 w-7 rounded-md object-contain" />
         <div className="min-w-0 truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</div>
       </div>
 
@@ -217,7 +217,7 @@ function Layout() {
         >
           <NavIcon name="menu" />
         </button>
-        <img src="/favicon.svg" alt="" className="h-6 w-6" />
+        <img src={meta?.look?.logo_url || '/favicon.svg'} alt="" className="h-6 w-6 rounded object-contain" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-50">{meta?.company_name}</span>
       </header>
       {drawer && (

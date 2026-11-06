@@ -1,3 +1,4 @@
+import type { Look } from './brand'
 // Tiny API client. Every state-changing call sends X-Rexus-Request (CSRF guard).
 
 export class ApiError extends Error {
@@ -45,6 +46,7 @@ export interface Meta {
   setup_required: boolean
   two_fa_mode: string
   backup_enabled: boolean
+  look: Look
   modules: { scheduler: boolean; vault: boolean }
 }
 

@@ -172,7 +172,6 @@ export function BackupsPage() {
     <>
       <PageHeader
         title="Backups"
-        subtitle="A copy of the whole database, saved to this computer. Nothing is kept on the server."
         actions={<BackupNowButton running={running} onDone={(r) => { setDone(r); load() }} onError={(m) => setError(m || null)} />}
       />
       <ErrorBox error={error} />
@@ -192,24 +191,15 @@ export function BackupsPage() {
                   : 'You have a recent backup.'}
         </div>
         <div className="mt-1 text-xs opacity-80">
-          {status.last_success_at ? <>Last good backup {timeAgo(status.last_success_at)} ({fmtTime(status.last_success_at)}). </> : null}
-          Backups are made when you click the button, not on a schedule.
+          {status.last_success_at ? <>Last good backup {timeAgo(status.last_success_at)} ({fmtTime(status.last_success_at)}).</> : null}
         </div>
         {status.state === 'failed' && status.last_error && <div className="mt-2 break-words text-xs">{status.last_error}</div>}
       </div>
 
-      <Card className="mb-8 space-y-2 p-4 text-sm text-zinc-400">
-        <p>
-          The file is a plain copy of the database, <b className="text-zinc-200">not encrypted</b> — keep it somewhere you trust. Vault secrets inside
-          stay encrypted and need <code>REXUS_MASTER_KEY</code> to be read, so keep that key safe and separate from the backup.
-        </p>
-        <p className="text-xs text-zinc-500">Scheduled backups and cloud storage (such as S3) are not available yet.</p>
-      </Card>
-
       <section>
         <h2 className="mb-3 font-medium text-zinc-200">Recent backups</h2>
         {backups.length === 0 ? (
-          <Empty title="No backups yet">Click “Backup now” to save a copy of the database to this computer.</Empty>
+          <Empty title="No backups yet">Click “Backup now” to save one.</Empty>
         ) : (
           <Card className="divide-y divide-zinc-800/70">
             {backups.map((b) => (

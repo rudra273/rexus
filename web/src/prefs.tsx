@@ -61,14 +61,31 @@ function savePrefs(p: Prefs) {
 // The current choice, readable by plain functions such as fmtTime.
 let current: Prefs = loadPrefs()
 
+// What the instance's owner chose for everyone who hasn't picked their own.
+let instance = { timezone: '', dateFormat: 'system' }
+const listeners = new Set<() => void>()
+
+/** Called when the instance defaults are known or change; times shown in the app update. */
+export function setInstanceDefaults(timezone: string, dateFormat: string) {
+  if (instance.timezone === timezone && instance.dateFormat === dateFormat) return
+  instance = { timezone: validTimezone(timezone), dateFormat }
+  listeners.forEach((l) => l())
+}
+
+function effectiveFormat(): DateFormat {
+  if (current.dateFormat !== 'system') return current.dateFormat
+  return oneOf(instance.dateFormat, ['system', 'iso', 'dmy', 'mdy'], 'system')
+}
+
 const LOCALES: Record<Exclude<DateFormat, 'system'>, string> = { iso: 'sv-SE', dmy: 'en-GB', mdy: 'en-US' }
 
 /** Date and time in the user's chosen timezone and style. */
 export function formatDateTime(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const timeZone = current.timezone || undefined
-  const locale = current.dateFormat === 'system' ? undefined : LOCALES[current.dateFormat]
+  const timeZone = current.timezone || instance.timezone || undefined
+  const fmt = effectiveFormat()
+  const locale = fmt === 'system' ? undefined : LOCALES[fmt]
   try {
     return d.toLocaleString(locale, { timeZone })
   } catch {
@@ -101,6 +118,12 @@ const PrefsContext = createContext<PrefsState | null>(null)
 
 export function PrefsProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<Prefs>(current)
+  const [instanceKey, setInstanceKey] = useState('')
+  useEffect(() => {
+    const on = () => setInstanceKey(`${instance.timezone}|${instance.dateFormat}`)
+    listeners.add(on)
+    return () => void listeners.delete(on)
+  }, [])
 
   const update = useCallback((next: Prefs) => {
     current = next
@@ -125,7 +148,7 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
   // Changing timezone or date style re-renders the whole tree, so every formatted time updates.
   return (
     <PrefsContext.Provider value={value}>
-      <div key={`${prefs.timezone}|${prefs.dateFormat}`} className="contents">
+      <div key={`${prefs.timezone}|${prefs.dateFormat}|${instanceKey}`} className="contents">
         {children}
       </div>
     </PrefsContext.Provider>

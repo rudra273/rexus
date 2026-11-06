@@ -11,8 +11,13 @@ package appsettings
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +38,31 @@ type Values struct {
 	ModuleVault     bool // secrets, environments, and the deploy tokens that read them
 	ModuleScheduler bool // user-defined jobs (health checks always run)
 	BackupEnabled   bool // scheduled and manual backups
+
+	// Look and feel, shared by everyone unless a person picks their own in Profile.
+	Timezone    string // IANA name; "" = each person's browser
+	DateFormat  string // system | iso | dmy | mdy
+	AccentColor string // "#rrggbb"; "" = the built-in green
+	Logo        string // data URI of the uploaded logo; "" = the Rexus logo
+	LogoVersion string // short hash of Logo, so browsers fetch a new one when it changes
+
+	SessionHours int // how long a login lasts without activity
 }
+
+// SessionTTL is how long a login stays valid without activity.
+func (v Values) SessionTTL() time.Duration {
+	h := v.SessionHours
+	if h < 1 {
+		h = DefaultSessionHours
+	}
+	return time.Duration(h) * time.Hour
+}
+
+const (
+	DefaultSessionHours = 8
+	MaxSessionHours     = 720 // 30 days
+	MaxLogoBytes        = 256 << 10
+)
 
 // SecureCookies reports whether session cookies should carry the Secure flag. It follows the public URL.
 func (v Values) SecureCookies() bool { return strings.HasPrefix(v.BaseURL, "https://") }
@@ -53,10 +82,17 @@ type overrides struct {
 	ModuleVault     *bool   `json:"module_vault,omitempty"`
 	ModuleScheduler *bool   `json:"module_scheduler,omitempty"`
 	BackupEnabled   *bool   `json:"backup_enabled,omitempty"`
+
+	Timezone     *string `json:"timezone,omitempty"`
+	DateFormat   *string `json:"date_format,omitempty"`
+	AccentColor  *string `json:"accent_color,omitempty"`
+	Logo         *string `json:"logo,omitempty"`
+	SessionHours *int    `json:"session_hours,omitempty"`
 }
 
 func (o overrides) empty() bool {
-	return o.CompanyName == nil && o.BaseURL == nil && o.ModuleVault == nil && o.ModuleScheduler == nil && o.BackupEnabled == nil
+	return o.CompanyName == nil && o.BaseURL == nil && o.ModuleVault == nil && o.ModuleScheduler == nil && o.BackupEnabled == nil &&
+		o.Timezone == nil && o.DateFormat == nil && o.AccentColor == nil && o.Logo == nil && o.SessionHours == nil
 }
 
 // Patch is a change request. For the two text settings, nil leaves a setting as it is, an empty string clears
@@ -70,6 +106,14 @@ type Patch struct {
 	ModuleScheduler *bool
 	BackupEnabled   *bool
 	ResetModules    bool // applied first, so a switch given in the same patch still wins
+
+	// Look and feel and sessions. Like the two text settings above: nil leaves it, "" (or 0 for SessionHours)
+	// goes back to the default, anything else is validated and saved.
+	Timezone     *string
+	DateFormat   *string
+	AccentColor  *string
+	Logo         *string
+	SessionHours *int
 }
 
 // Store is the part of the database layer this package needs (the settings key/value table).
@@ -119,6 +163,11 @@ func (s *Service) Sources() map[string]Source {
 		"module_vault":     src(s.over.ModuleVault != nil),
 		"module_scheduler": src(s.over.ModuleScheduler != nil),
 		"backup_enabled":   src(s.over.BackupEnabled != nil),
+		"timezone":         src(s.over.Timezone != nil),
+		"date_format":      src(s.over.DateFormat != nil),
+		"accent_color":     src(s.over.AccentColor != nil),
+		"logo":             src(s.over.Logo != nil),
+		"session_hours":    src(s.over.SessionHours != nil),
 	}
 }
 
@@ -190,6 +239,40 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 			next.BaseURL = &v
 		}
 	}
+	for _, f := range []struct {
+		in  *string
+		out **string
+		val func(string) (string, error)
+	}{
+		{p.Timezone, &next.Timezone, ValidateTimezone},
+		{p.DateFormat, &next.DateFormat, ValidateDateFormat},
+		{p.AccentColor, &next.AccentColor, ValidateAccentColor},
+		{p.Logo, &next.Logo, ValidateLogo},
+	} {
+		if f.in == nil {
+			continue
+		}
+		if *f.in == "" {
+			*f.out = nil
+			continue
+		}
+		v, err := f.val(*f.in)
+		if err != nil {
+			return Values{}, err
+		}
+		*f.out = &v
+	}
+	if p.SessionHours != nil {
+		if *p.SessionHours == 0 {
+			next.SessionHours = nil
+		} else {
+			if *p.SessionHours < 1 || *p.SessionHours > MaxSessionHours {
+				return Values{}, invalid("the session length must be between 1 hour and %d hours", MaxSessionHours)
+			}
+			h := *p.SessionHours
+			next.SessionHours = &h
+		}
+	}
 	if err := s.save(ctx, next); err != nil {
 		return Values{}, err
 	}
@@ -233,6 +316,32 @@ func (s *Service) apply() Values {
 	if s.over.BackupEnabled != nil {
 		v.BackupEnabled = *s.over.BackupEnabled
 	}
+	if s.over.Timezone != nil {
+		v.Timezone = *s.over.Timezone
+	}
+	if s.over.DateFormat != nil {
+		v.DateFormat = *s.over.DateFormat
+	}
+	if s.over.AccentColor != nil {
+		v.AccentColor = *s.over.AccentColor
+	}
+	if s.over.Logo != nil {
+		v.Logo = *s.over.Logo
+	}
+	if s.over.SessionHours != nil {
+		v.SessionHours = *s.over.SessionHours
+	}
+	if v.DateFormat == "" {
+		v.DateFormat = "system"
+	}
+	if v.SessionHours < 1 {
+		v.SessionHours = DefaultSessionHours
+	}
+	v.LogoVersion = ""
+	if v.Logo != "" {
+		sum := sha256.Sum256([]byte(v.Logo))
+		v.LogoVersion = hex.EncodeToString(sum[:4])
+	}
 	s.cur.Store(&v)
 	return v
 }
@@ -247,6 +356,26 @@ func (s *Service) sanitize(o overrides) overrides {
 		if v, err := ValidateCompanyName(*o.CompanyName); err == nil {
 			out.CompanyName = &v
 		}
+	}
+	for _, f := range []struct {
+		in  *string
+		out **string
+		val func(string) (string, error)
+	}{
+		{o.Timezone, &out.Timezone, ValidateTimezone},
+		{o.DateFormat, &out.DateFormat, ValidateDateFormat},
+		{o.AccentColor, &out.AccentColor, ValidateAccentColor},
+		{o.Logo, &out.Logo, ValidateLogo},
+	} {
+		if f.in == nil {
+			continue
+		}
+		if v, err := f.val(*f.in); err == nil {
+			*f.out = &v
+		}
+	}
+	if o.SessionHours != nil && *o.SessionHours >= 1 && *o.SessionHours <= MaxSessionHours {
+		out.SessionHours = o.SessionHours
 	}
 	if o.BaseURL != nil {
 		if v, err := ValidateBaseURL(*o.BaseURL); err == nil {
@@ -298,4 +427,84 @@ func ValidateBaseURL(s string) (string, error) {
 		return "", invalid("the public URL must name a host")
 	}
 	return u.Scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+// ValidateTimezone checks it is a real IANA timezone name such as "Europe/London".
+func ValidateTimezone(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if len(s) > 64 || s == "Local" {
+		return "", invalid("that isn't a timezone")
+	}
+	if _, err := time.LoadLocation(s); err != nil {
+		return "", invalid("%q isn't a known timezone", s)
+	}
+	return s, nil
+}
+
+// ValidateDateFormat accepts the same four styles the Profile page offers.
+func ValidateDateFormat(s string) (string, error) {
+	switch s {
+	case "system", "iso", "dmy", "mdy":
+		return s, nil
+	}
+	return "", invalid("the date format must be system, iso, dmy or mdy")
+}
+
+var accentRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// ValidateAccentColor checks it is a #rrggbb colour and returns it in lower case.
+func ValidateAccentColor(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if !accentRe.MatchString(s) {
+		return "", invalid("the accent colour must look like #10b981")
+	}
+	return strings.ToLower(s), nil
+}
+
+const dataPrefix = "data:"
+
+// ParseLogo splits a logo data URI into its content type and bytes.
+func ParseLogo(dataURI string) (contentType string, body []byte, err error) {
+	rest, ok := strings.CutPrefix(dataURI, dataPrefix)
+	if !ok {
+		return "", nil, invalid("the logo must be an image file")
+	}
+	meta, b64, ok := strings.Cut(rest, ",")
+	if !ok || !strings.HasSuffix(meta, ";base64") {
+		return "", nil, invalid("the logo must be an image file")
+	}
+	contentType = strings.TrimSuffix(meta, ";base64")
+	if base64.StdEncoding.DecodedLen(len(b64)) > MaxLogoBytes+3 {
+		return "", nil, invalid("the logo is too large (the limit is %d KB)", MaxLogoBytes>>10)
+	}
+	body, err = base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "", nil, invalid("the logo file is damaged")
+	}
+	if len(body) == 0 || len(body) > MaxLogoBytes {
+		return "", nil, invalid("the logo must be between 1 byte and %d KB", MaxLogoBytes>>10)
+	}
+	return contentType, body, nil
+}
+
+// ValidateLogo accepts a PNG, JPEG, WebP or SVG image of up to 256 KB, given as a base64 data URI. The bytes must
+// really be that kind of image, not just labelled as one.
+func ValidateLogo(s string) (string, error) {
+	ct, body, err := ParseLogo(strings.TrimSpace(s))
+	if err != nil {
+		return "", err
+	}
+	switch ct {
+	case "image/png", "image/jpeg", "image/webp":
+		if http.DetectContentType(body) != ct {
+			return "", invalid("that file isn't a real %s image", strings.TrimPrefix(ct, "image/"))
+		}
+	case "image/svg+xml":
+		if !strings.Contains(strings.ToLower(string(body)), "<svg") {
+			return "", invalid("that file isn't a real SVG image")
+		}
+	default:
+		return "", invalid("the logo must be a PNG, JPEG, WebP or SVG image")
+	}
+	return strings.TrimSpace(s), nil
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 import { Link } from 'react-router-dom'
+import { useAuth } from './auth'
 import { NavIcon } from './icons'
 import { formatDateTime } from './prefs'
 
@@ -322,12 +323,13 @@ export function fmtTime(iso: string | null): string {
 }
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle?: ReactNode; children: ReactNode }) {
+  const { meta } = useAuth()
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex items-center gap-2.5">
-          <img src="/favicon.svg" alt="" className="h-8 w-8" />
-          <span className="text-lg font-semibold text-zinc-50">Rexus</span>
+          <img src={meta?.look?.logo_url || '/favicon.svg'} alt="" className="h-8 w-8 rounded-md object-contain" />
+          <span className="text-lg font-semibold text-zinc-50">{meta?.company_name ?? 'Rexus'}</span>
         </div>
         <h1 className="text-xl font-semibold text-zinc-50">{title}</h1>
         {subtitle && <p className="mt-1.5 text-sm text-zinc-400">{subtitle}</p>}

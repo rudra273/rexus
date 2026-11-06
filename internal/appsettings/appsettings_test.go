@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeStore is an in-memory settings table. failSet makes writes fail.
@@ -48,7 +49,7 @@ func (f *fakeStore) DeleteSetting(_ context.Context, key string) error {
 	return nil
 }
 
-var defaults = Values{CompanyName: "Rexus", BaseURL: "http://localhost:8080"}
+var defaults = Values{CompanyName: "Rexus", BaseURL: "http://localhost:8080", DateFormat: "system", SessionHours: 8}
 
 func str(s string) *string { return &s }
 
@@ -360,5 +361,92 @@ func TestResetModulesAndASwitchInOnePatch(t *testing.T) {
 	}
 	if v.ModuleVault || !v.ModuleScheduler {
 		t.Fatalf("got %+v, want vault off (just set) and scheduler back on (reset)", v)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// a 1x1 transparent PNG
+const tinyPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+func TestLookAndSessionSettings(t *testing.T) {
+	f := newFake()
+	s := New(f, Values{CompanyName: "Acme", BaseURL: "https://x.test", DateFormat: "system", SessionHours: 8})
+	if v := s.Get(); v.SessionTTL() != 8*time.Hour || v.Timezone != "" || v.AccentColor != "" || v.Logo != "" {
+		t.Fatalf("defaults wrong: %+v", v)
+	}
+	v, err := s.Update(context.Background(), Patch{
+		Timezone: ptr("Europe/London"), DateFormat: ptr("dmy"), AccentColor: ptr("#3B82F6"), Logo: ptr(tinyPNG), SessionHours: ptr(24),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Timezone != "Europe/London" || v.DateFormat != "dmy" || v.AccentColor != "#3b82f6" || v.SessionTTL() != 24*time.Hour || v.LogoVersion == "" {
+		t.Fatalf("not applied: %+v", v)
+	}
+	// survives a restart
+	s2 := New(f, Values{DateFormat: "system", SessionHours: 8})
+	if err := s2.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.Get(); got.Timezone != "Europe/London" || got.SessionHours != 24 || got.Logo != tinyPNG {
+		t.Fatalf("not persisted: %+v", got)
+	}
+	// clearing goes back to the defaults
+	v, err = s.Update(context.Background(), Patch{Timezone: ptr(""), DateFormat: ptr(""), AccentColor: ptr(""), Logo: ptr(""), SessionHours: ptr(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Timezone != "" || v.DateFormat != "system" || v.AccentColor != "" || v.Logo != "" || v.LogoVersion != "" || v.SessionHours != 8 {
+		t.Fatalf("not cleared: %+v", v)
+	}
+	if len(f.rows) != 0 {
+		t.Fatalf("expected the row to be deleted, have %v", f.rows)
+	}
+}
+
+func TestLookAndSessionValidation(t *testing.T) {
+	bad := []Patch{
+		{Timezone: ptr("Mars/Olympus")},
+		{Timezone: ptr("Local")},
+		{DateFormat: ptr("klingon")},
+		{AccentColor: ptr("red")},
+		{AccentColor: ptr("#12345")},
+		{SessionHours: ptr(-1)},
+		{SessionHours: ptr(721)},
+		{Logo: ptr("https://evil.test/x.png")},
+		{Logo: ptr("data:text/html;base64,PGgxPmhpPC9oMT4=")},
+		{Logo: ptr("data:image/png;base64,PGgxPmhpPC9oMT4=")}, // labelled PNG, really HTML
+		{Logo: ptr("data:image/svg+xml;base64,aGVsbG8=")},     // labelled SVG, no <svg
+		{Logo: ptr("data:image/png;base64,!!!")},
+	}
+	for i, p := range bad {
+		s := New(newFake(), Values{})
+		if _, err := s.Update(context.Background(), p); err == nil {
+			t.Errorf("case %d should have been refused", i)
+		} else if _, ok := err.(*InvalidError); !ok {
+			t.Errorf("case %d: want InvalidError, got %T", i, err)
+		}
+	}
+	svg := "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+	if _, err := New(newFake(), Values{}).Update(context.Background(), Patch{Logo: ptr(svg)}); err != nil {
+		t.Errorf("a real SVG should be accepted: %v", err)
+	}
+	big := "data:image/png;base64," + strings.Repeat("A", 400<<10)
+	if _, err := New(newFake(), Values{}).Update(context.Background(), Patch{Logo: ptr(big)}); err == nil {
+		t.Error("an oversized logo should be refused")
+	}
+}
+
+func TestLoadIgnoresBadLookValues(t *testing.T) {
+	f := newFake()
+	f.rows[key] = []byte(`{"timezone":"Nope/Nope","accent_color":"blue","session_hours":99999,"logo":"data:text/html;base64,AAAA"}`)
+	s := New(f, Values{DateFormat: "system", SessionHours: 8})
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	v := s.Get()
+	if v.Timezone != "" || v.AccentColor != "" || v.Logo != "" || v.SessionHours != 8 {
+		t.Fatalf("bad saved values should be ignored: %+v", v)
 	}
 }

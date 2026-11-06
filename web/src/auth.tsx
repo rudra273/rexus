@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type Meta, type NextStep, type SessionResp, type User } from './api'
+import { applyAccent } from './brand'
+import { setInstanceDefaults } from './prefs'
 
 interface AuthState {
   loading: boolean
@@ -22,6 +24,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const m = await api<Meta>('/api/meta')
       setMeta(m)
+      applyAccent(m.look?.accent_color ?? '')
+      setInstanceDefaults(m.look?.timezone ?? '', m.look?.date_format ?? 'system')
       document.title = m.company_name === 'Rexus' ? 'Rexus' : `${m.company_name} · Rexus`
       if (m.setup_required) {
         setUser(null)

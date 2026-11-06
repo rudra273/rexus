@@ -183,6 +183,8 @@ function PasswordSection() {
 function PreferencesTab() {
   const { prefs, set, reset } = usePrefs()
   const system = browserTimezone()
+  const { meta } = useAuth()
+  const look = meta?.look
   const zones = timezoneList()
   const sample = new Date().toISOString()
 
@@ -212,7 +214,7 @@ function PreferencesTab() {
         <div className="space-y-1.5 px-4 py-3">
           <Field label="Timezone" hint="Used for every date and time shown in Rexus.">
             <Select value={prefs.timezone} onChange={(e) => set({ timezone: e.target.value })}>
-              <option value="">Browser default ({system})</option>
+              <option value="">{look?.timezone ? `Default (${look.timezone})` : `Browser default (${system})`}</option>
               {zones.map((z) => (
                 <option key={z} value={z}>{z}</option>
               ))}
@@ -222,7 +224,7 @@ function PreferencesTab() {
         <div className="space-y-1.5 px-4 py-3">
           <Field label="Date format" hint={`Example: ${fmtTime(sample)}`}>
             <Select value={prefs.dateFormat} onChange={(e) => set({ dateFormat: e.target.value as DateFormat })}>
-              <option value="system">Browser default</option>
+              <option value="system">Default</option>
               <option value="iso">2026-11-05 14:32 (year first)</option>
               <option value="dmy">05/11/2026 (day first)</option>
               <option value="mdy">11/5/2026 (month first)</option>
