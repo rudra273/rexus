@@ -40,7 +40,7 @@ func (s *Server) handleCreateDeployToken(w http.ResponseWriter, r *http.Request,
 	if !requireWrite(w, a) {
 		return
 	}
-	if !s.cfg.ModuleVault {
+	if !s.settings.Get().ModuleVault {
 		writeError(w, http.StatusNotFound, "the vault module is disabled on this Rexus")
 		return
 	}

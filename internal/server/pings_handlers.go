@@ -101,7 +101,7 @@ func (s *Server) handlePauseProject(w http.ResponseWriter, r *http.Request, a *a
 		return
 	}
 	var nJobs int64
-	if s.cfg.ModuleScheduler {
+	if s.settings.Get().ModuleScheduler {
 		jobs, err := s.store.ListJobs(r.Context(), store.JobFilter{ProjectID: p.ID, Access: s.access(r)})
 		if err != nil {
 			s.internalError(w, r, err)

@@ -12,10 +12,20 @@ interface InstanceSettings {
   smtp?: { configured: boolean; host: string }
   /** The owner and admins can change the company name and public URL. */
   editable: boolean
-  /** Where each of those two comes from: the .env file, or saved from this page. */
-  sources: Record<'company_name' | 'base_url', 'env' | 'ui'>
+  /** Where each of these comes from: the .env file, or saved from this page. */
+  sources: Record<'company_name' | 'base_url' | 'module_vault' | 'module_scheduler' | 'backup_enabled', 'env' | 'ui'>
   /** The values from .env, which apply wherever nothing is saved. */
-  defaults: { company_name: string; base_url: string }
+  defaults: { company_name: string; base_url: string; modules: Modules }
+  /** The module switches as they are now. */
+  modules: Modules
+  /** Backups can only be switched on when REXUS_BACKUP_DIR is set (it is a folder mounted into the container). */
+  backup_dir_set: boolean
+}
+
+interface Modules {
+  vault: boolean
+  scheduler: boolean
+  backups: boolean
 }
 
 type Tab = 'general' | 'modules' | 'security' | 'notifications' | 'backups'
@@ -56,7 +66,7 @@ export function SettingsPage() {
       <PageHeader title="Settings" subtitle={<>App-wide configuration. Your own password, 2FA and display options are in <Link to="/profile" className="text-emerald-400 hover:underline">Profile</Link>.</>} />
       <Tabs tabs={tabs} value={tab} onChange={(id) => setParams(id === 'general' ? {} : { tab: id }, { replace: true })} label="Settings sections" />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="max-w-2xl space-y-4">
-        {tab !== 'general' && <ManagedNote />}
+        {(tab === 'security' || tab === 'notifications') && <ManagedNote />}
 
         {tab === 'general' && (
           <>
@@ -85,11 +95,13 @@ export function SettingsPage() {
         )}
 
         {tab === 'modules' && (
-          <Card className="divide-y divide-zinc-800">
-            <Row label="Vault" help="REXUS_MODULE_VAULT" value={<OnOff on={meta.modules.vault} />} />
-            <Row label="Jobs (scheduler)" help="REXUS_MODULE_SCHEDULER" value={<OnOff on={meta.modules.scheduler} />} />
-            <Row label="Backups" help="REXUS_BACKUP_ENABLED" value={<OnOff on={meta.backup_enabled} />} />
-          </Card>
+          <ModulesForm
+            instance={instance}
+            onSaved={async (next) => {
+              setInstance(next)
+              await refresh() // the sidebar and pages follow the switches
+            }}
+          />
         )}
 
         {tab === 'security' && (
@@ -133,12 +145,16 @@ export function SettingsPage() {
 
         {tab === 'backups' && (
           <Card className="divide-y divide-zinc-800">
-            <Row label="Backups" help="REXUS_BACKUP_ENABLED" value={<OnOff on={meta.backup_enabled} />} />
+            <Row label="Backups" value={<OnOff on={meta.backup_enabled} />} managed={false} />
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
               <div>
                 <div className="text-zinc-200">Schedule, retention and history</div>
                 <div className="text-xs text-zinc-500">
-                  {meta.backup_enabled ? 'Edited on the Backups page, which is the one place for these settings.' : 'Turn backups on in .env (REXUS_BACKUP_ENABLED and REXUS_BACKUP_DIR), then restart Rexus.'}
+                  {meta.backup_enabled
+                    ? 'Edited on the Backups page, which is the one place for these settings.'
+                    : instance.backup_dir_set
+                      ? <>Switch backups on under <Link to="/settings?tab=modules" className="text-emerald-400 hover:underline">Modules</Link>.</>
+                      : 'Set REXUS_BACKUP_DIR in .env and restart Rexus. After that you can switch backups on under Modules.'}
                 </div>
               </div>
               {meta.backup_enabled && <Link to="/backups" className="text-emerald-400 hover:underline">Open Backups</Link>}
@@ -278,6 +294,133 @@ function GeneralForm({ instance, onSaved }: { instance: InstanceSettings; onSave
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={busy || !(nameChanged || urlChanged)}>{busy ? 'Saving…' : 'Save changes'}</Button>
         <Button type="button" variant="ghost" onClick={cancel} disabled={busy}>Cancel</Button>
+      </div>
+    </form>
+  )
+}
+
+const MODULES: { key: keyof Modules; source: 'module_vault' | 'module_scheduler' | 'backup_enabled'; label: string; what: string; whenOff: string }[] = [
+  {
+    key: 'vault', source: 'module_vault', label: 'Vault',
+    what: 'Secrets and environments, and the deploy tokens that apps use to fetch them.',
+    whenOff: 'Vault: the Vault pages and the secrets API disappear, and deploy tokens stop working, so apps that fetch their environment variables from Rexus when they start will fail to start.',
+  },
+  {
+    key: 'scheduler', source: 'module_scheduler', label: 'Jobs (scheduler)',
+    what: 'Your scheduled jobs, such as keep-alive pings. Health checks always run.',
+    whenOff: 'Jobs: your scheduled jobs, including keep-alive pings, stop running. Health checks keep running.',
+  },
+  {
+    key: 'backups', source: 'backup_enabled', label: 'Backups',
+    what: 'Scheduled and manual backups of the database.',
+    whenOff: 'Backups: scheduled backups stop and “Backup now” is disabled. Backup files you already have stay where they are.',
+  },
+]
+
+/** Vault, Jobs and Backups on or off. Saved in the database; the .env values are the defaults. Nothing is deleted when a module is off. */
+function ModulesForm({ instance, onSaved }: { instance: InstanceSettings; onSaved: (next: InstanceSettings) => Promise<void> }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<Modules>(instance.modules)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const anySaved = MODULES.some((m) => instance.sources[m.source] === 'ui')
+  const changed = MODULES.filter((m) => draft[m.key] !== instance.modules[m.key])
+
+  async function send(body: { modules?: Partial<Modules>; reset_modules?: boolean }, willBeOff: (typeof MODULES)[number][]) {
+    if (willBeOff.length > 0 && !confirm(`Switch off ${willBeOff.map((m) => m.label).join(', ')}?\n\n${willBeOff.map((m) => m.whenOff).join('\n\n')}\n\nNothing is deleted. Switching a module back on brings it back as it was.`)) return
+    setBusy(true)
+    setError(null)
+    setSaved(false)
+    try {
+      const next = await api<InstanceSettings>('/api/settings', { method: 'PUT', body })
+      await onSaved(next)
+      setSaved(true)
+      setEditing(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startEditing() {
+    setDraft(instance.modules)
+    setError(null)
+    setSaved(false)
+    setEditing(true)
+  }
+
+  const badge = (m: (typeof MODULES)[number]) => (instance.sources[m.source] === 'ui' ? <>Saved here. Default from .env: {instance.defaults.modules[m.key] ? 'on' : 'off'}</> : 'From the .env file')
+  const needsFolder = (m: (typeof MODULES)[number]) => m.key === 'backups' && !instance.backup_dir_set
+
+  if (!editing) {
+    return (
+      <div className="space-y-4">
+        <Card className="divide-y divide-zinc-800">
+          {MODULES.map((m) => (
+            <div key={m.key} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm">
+              <div className="min-w-0">
+                <div className="text-zinc-200">{m.label}</div>
+                <div className="text-xs text-zinc-400">{m.what}</div>
+                <div className="text-xs text-zinc-400">{badge(m)}</div>
+              </div>
+              <OnOff on={instance.modules[m.key]} />
+            </div>
+          ))}
+        </Card>
+        {!instance.backup_dir_set && !instance.modules.backups && (
+          <p className="text-xs text-zinc-400">Backups can't be switched on yet: set <code>REXUS_BACKUP_DIR</code> in <code>.env</code> (a folder for the backup files) and restart Rexus.</p>
+        )}
+        <div className="flex items-center gap-3">
+          {instance.editable && <Button variant="secondary" onClick={startEditing}>Edit</Button>}
+          {saved && <span role="status" className="text-sm text-emerald-400">Saved</span>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault()
+        void send({ modules: Object.fromEntries(changed.map((m) => [m.key, draft[m.key]])) }, changed.filter((m) => !draft[m.key]))
+      }}
+      className="space-y-4"
+    >
+      <Card className="divide-y divide-zinc-800">
+        {MODULES.map((m) => (
+          <label key={m.key} className="flex cursor-pointer items-start gap-3 px-4 py-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-emerald-500"
+              checked={draft[m.key]}
+              disabled={busy || (needsFolder(m) && !draft[m.key])}
+              onChange={(e) => setDraft({ ...draft, [m.key]: e.target.checked })}
+            />
+            <span className="min-w-0">
+              <span className="block text-zinc-200">{m.label}</span>
+              <span className="block text-xs text-zinc-400">{m.what}</span>
+              {needsFolder(m) && <span className="block text-xs text-amber-300">Needs a backup folder: set REXUS_BACKUP_DIR in .env and restart Rexus.</span>}
+            </span>
+          </label>
+        ))}
+      </Card>
+      <ErrorBox error={error} />
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={busy || changed.length === 0}>{busy ? 'Saving…' : 'Save changes'}</Button>
+        <Button type="button" variant="ghost" onClick={() => { setError(null); setEditing(false) }} disabled={busy}>Cancel</Button>
+        {anySaved && (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void send({ reset_modules: true }, MODULES.filter((m) => instance.modules[m.key] && !instance.defaults.modules[m.key]))}
+            className="ml-auto"
+          >
+            Use the defaults from .env
+          </Button>
+        )}
       </div>
     </form>
   )

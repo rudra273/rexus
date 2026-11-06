@@ -166,7 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/owner/transfer", s.authed(s.handleTransferOwnership))
 	mux.HandleFunc("GET /api/audit", s.authed(s.handleAudit))
 
-	// Backups (owner / admin; 404 unless REXUS_BACKUP_ENABLED)
+	// Backups (owner / admin; 404 unless backups are switched on)
 	mux.HandleFunc("GET /api/backups", s.authed(s.handleListBackups))
 	mux.HandleFunc("GET /api/backups/status", s.authed(s.handleBackupStatus))
 	mux.HandleFunc("POST /api/backups/run", s.authed(s.handleRunBackup))
@@ -233,36 +233,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/checks/{id}/run", s.authed(s.handleRunCheck))
 	mux.HandleFunc("GET /api/checks/{id}/series", s.authed(s.handleCheckSeries))
 
-	if s.cfg.ModuleScheduler {
-		mux.HandleFunc("GET /api/jobs", s.authed(s.handleListJobs))
-		mux.HandleFunc("POST /api/jobs", s.authed(s.handleCreateJob))
-		mux.HandleFunc("GET /api/jobs/{id}", s.authed(s.handleGetJob))
-		mux.HandleFunc("PUT /api/jobs/{id}", s.authed(s.handleUpdateJob))
-		mux.HandleFunc("PATCH /api/jobs/{id}", s.authed(s.handlePatchJob))
-		mux.HandleFunc("DELETE /api/jobs/{id}", s.authed(s.handleDeleteJob))
-		mux.HandleFunc("POST /api/jobs/{id}/run", s.authed(s.handleRunJob))
-		mux.HandleFunc("GET /api/jobs/{id}/runs", s.authed(s.handleListRuns))
-		mux.HandleFunc("GET /api/schedule/preview", s.authed(s.handleSchedulePreview))
-	}
+	// Jobs (the scheduler module) and the Vault: always registered, and answered with "not found" while the module is
+	// switched off, so the owner or an admin can switch them on and off without a restart.
+	schedulerOn := s.moduleGate(func() bool { return s.settings.Get().ModuleScheduler })
+	mux.HandleFunc("GET /api/jobs", schedulerOn(s.authed(s.handleListJobs)))
+	mux.HandleFunc("POST /api/jobs", schedulerOn(s.authed(s.handleCreateJob)))
+	mux.HandleFunc("GET /api/jobs/{id}", schedulerOn(s.authed(s.handleGetJob)))
+	mux.HandleFunc("PUT /api/jobs/{id}", schedulerOn(s.authed(s.handleUpdateJob)))
+	mux.HandleFunc("PATCH /api/jobs/{id}", schedulerOn(s.authed(s.handlePatchJob)))
+	mux.HandleFunc("DELETE /api/jobs/{id}", schedulerOn(s.authed(s.handleDeleteJob)))
+	mux.HandleFunc("POST /api/jobs/{id}/run", schedulerOn(s.authed(s.handleRunJob)))
+	mux.HandleFunc("GET /api/jobs/{id}/runs", schedulerOn(s.authed(s.handleListRuns)))
+	mux.HandleFunc("GET /api/schedule/preview", schedulerOn(s.authed(s.handleSchedulePreview)))
 
-	if s.cfg.ModuleVault {
-		mux.HandleFunc("GET /api/projects/{key}/environments", s.authed(s.handleListEnvironments))
-		mux.HandleFunc("POST /api/projects/{key}/environments", s.authed(s.handleCreateEnvironment))
-		mux.HandleFunc("PATCH /api/environments/{id}", s.authed(s.handleRenameEnvironment))
-		mux.HandleFunc("DELETE /api/environments/{id}", s.authed(s.handleDeleteEnvironment))
-		mux.HandleFunc("POST /api/environments/{id}/secrets", s.authed(s.handleCreateSecret))
-		mux.HandleFunc("POST /api/environments/{id}/secrets/bulk", s.authed(s.handleBulkSecrets))
-		mux.HandleFunc("POST /api/environments/{id}/secrets/delete-all", s.authed(s.handleDeleteAllSecrets))
+	vaultOn := s.moduleGate(func() bool { return s.settings.Get().ModuleVault })
+	mux.HandleFunc("GET /api/projects/{key}/environments", vaultOn(s.authed(s.handleListEnvironments)))
+	mux.HandleFunc("POST /api/projects/{key}/environments", vaultOn(s.authed(s.handleCreateEnvironment)))
+	mux.HandleFunc("PATCH /api/environments/{id}", vaultOn(s.authed(s.handleRenameEnvironment)))
+	mux.HandleFunc("DELETE /api/environments/{id}", vaultOn(s.authed(s.handleDeleteEnvironment)))
+	mux.HandleFunc("POST /api/environments/{id}/secrets", vaultOn(s.authed(s.handleCreateSecret)))
+	mux.HandleFunc("POST /api/environments/{id}/secrets/bulk", vaultOn(s.authed(s.handleBulkSecrets)))
+	mux.HandleFunc("POST /api/environments/{id}/secrets/delete-all", vaultOn(s.authed(s.handleDeleteAllSecrets)))
 
-		mux.HandleFunc("GET /api/secrets", s.authed(s.handleListSecrets))
-		mux.HandleFunc("GET /api/secrets/{id}", s.authed(s.handleGetSecret))
-		mux.HandleFunc("PATCH /api/secrets/{id}", s.authed(s.handleUpdateSecret))
-		mux.HandleFunc("DELETE /api/secrets/{id}", s.authed(s.handleDeleteSecret))
-		mux.HandleFunc("POST /api/secrets/{id}/reveal", s.authed(s.handleRevealSecret))
-		mux.HandleFunc("GET /api/secrets/{id}/versions", s.authed(s.handleListVersions))
-		mux.HandleFunc("POST /api/secrets/{id}/restore", s.authed(s.handleRestoreSecret))
-		mux.HandleFunc("POST /api/secrets/{id}/move", s.authed(s.handleMoveSecret))
-	}
+	mux.HandleFunc("GET /api/secrets", vaultOn(s.authed(s.handleListSecrets)))
+	mux.HandleFunc("GET /api/secrets/{id}", vaultOn(s.authed(s.handleGetSecret)))
+	mux.HandleFunc("PATCH /api/secrets/{id}", vaultOn(s.authed(s.handleUpdateSecret)))
+	mux.HandleFunc("DELETE /api/secrets/{id}", vaultOn(s.authed(s.handleDeleteSecret)))
+	mux.HandleFunc("POST /api/secrets/{id}/reveal", vaultOn(s.authed(s.handleRevealSecret)))
+	mux.HandleFunc("GET /api/secrets/{id}/versions", vaultOn(s.authed(s.handleListVersions)))
+	mux.HandleFunc("POST /api/secrets/{id}/restore", vaultOn(s.authed(s.handleRestoreSecret)))
+	mux.HandleFunc("POST /api/secrets/{id}/move", vaultOn(s.authed(s.handleMoveSecret)))
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -270,6 +270,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", s.spaHandler())
 
 	return s.recoverer(s.securityHeaders(s.ipGate(s.csrf(s.limitBody(mux)))))
+}
+
+// moduleGate wraps a handler so it answers "not found" - exactly like a route that doesn't exist - while the
+// module is switched off.
+func (s *Server) moduleGate(on func() bool) func(http.HandlerFunc) http.HandlerFunc {
+	return func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !on() {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			h(w, r)
+		}
+	}
 }
 
 // ipGate enforces REXUS_IP_ALLOWLIST. Loopback is always allowed so the

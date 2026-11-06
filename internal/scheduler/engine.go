@@ -31,18 +31,20 @@ const (
 var HeadersAAD = []byte("rexus:job-headers")
 
 type Engine struct {
-	store    *store.Store
-	keys     *crypto.Keyring
-	log      *slog.Logger
-	alerts   *alerts.Service
-	userJobs bool // REXUS_MODULE_SCHEDULER
+	store  *store.Store
+	keys   *crypto.Keyring
+	log    *slog.Logger
+	alerts *alerts.Service
+	// userJobs says whether user-defined jobs should run right now. The scheduler module can be switched on and
+	// off while Rexus runs, so it is asked on every tick. Health checks run either way.
+	userJobs func() bool
 
 	client *http.Client
 	sem    chan struct{}
 	wg     sync.WaitGroup
 }
 
-func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, userJobs bool, al *alerts.Service) *Engine {
+func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, userJobs func() bool, al *alerts.Service) *Engine {
 	return &Engine{
 		store:    st,
 		keys:     keys,
@@ -83,10 +85,10 @@ func (e *Engine) Start(ctx context.Context) {
 			}
 		}
 	}()
-	if e.userJobs {
+	if e.userJobs() {
 		e.log.Info("scheduler started", "poll", pollInterval.String())
 	} else {
-		e.log.Info("scheduler: user jobs disabled (REXUS_MODULE_SCHEDULER=false); health checks still run")
+		e.log.Info("scheduler: user jobs are switched off (Settings → Modules, or REXUS_MODULE_SCHEDULER=false); health checks still run")
 	}
 }
 
@@ -102,9 +104,9 @@ func (e *Engine) Wait(timeout time.Duration) {
 }
 
 // tickAll runs everything that is due. Health checks are system jobs and
-// always run; user cron jobs run only when REXUS_MODULE_SCHEDULER is on.
+// always run; user cron jobs run only while the scheduler module is on.
 func (e *Engine) tickAll(ctx context.Context) {
-	if e.userJobs {
+	if e.userJobs() {
 		e.tick(ctx)
 	}
 	e.tickHealth(ctx)

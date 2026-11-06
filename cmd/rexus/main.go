@@ -43,7 +43,7 @@ Usage:
   rexus owner create --email EMAIL  Create the owner (prompts for password)
   rexus owner reset                 Reset the owner's password and 2FA
   rexus owner transfer --to EMAIL   Hand ownership to another active user
-  rexus settings show               Show the company name and public URL in use, and where each comes from
+  rexus settings show               Show the company name, public URL and module switches in use, and where each comes from
   rexus settings reset              Clear settings saved from the web UI (back to the .env values)
   rexus migrate                    Run database migrations and exit
   rexus keygen                      Generate a new REXUS_MASTER_KEY
@@ -161,8 +161,8 @@ func cmdServe() error {
 	}
 
 	al := newAlerts(cfg, as, st, keys, log)
-	bk := backup.New(st, log, al, backup.Options{Enabled: cfg.BackupEnabled, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
-	engine := scheduler.New(st, keys, log, cfg.ModuleScheduler, al)
+	bk := backup.New(st, log, al, backup.Options{EnabledFn: func() bool { return as.Get().BackupEnabled }, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
+	engine := scheduler.New(st, keys, log, func() bool { return as.Get().ModuleScheduler }, al)
 	srv := server.New(cfg, as, st, keys, engine, al, bk, log, version)
 	if err := srv.InitSetup(ctx); err != nil {
 		return err
@@ -419,16 +419,27 @@ func newAlerts(cfg *config.Config, as *appsettings.Service, st *store.Store, key
 	})
 }
 
+// settingsDefaults are the values from .env: what applies wherever nothing is saved from the web UI.
+func settingsDefaults(cfg *config.Config) appsettings.Values {
+	return appsettings.Values{
+		CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL,
+		ModuleVault: cfg.ModuleVault, ModuleScheduler: cfg.ModuleScheduler, BackupEnabled: cfg.BackupEnabled,
+		BackupDirSet: cfg.BackupDir != "",
+	}
+}
+
 // loadSettings starts the settings that can be changed from the web UI: the .env values are the defaults, and
 // whatever the owner saved in the database overrides them. If the database can't be read the defaults are used.
 func loadSettings(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) *appsettings.Service {
-	as := appsettings.New(st, appsettings.Values{CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL})
+	as := appsettings.New(st, settingsDefaults(cfg))
 	if err := as.Load(ctx); err != nil {
 		log.Warn("couldn't read the settings saved in the web UI; using the values from .env", "error", err)
 		return as
 	}
 	v, src := as.Get(), as.Sources()
-	log.Info("instance settings", "company", v.CompanyName, "company_from", src["company_name"], "url", v.BaseURL, "url_from", src["base_url"])
+	log.Info("instance settings", "company", v.CompanyName, "company_from", src["company_name"], "url", v.BaseURL, "url_from", src["base_url"],
+		"vault", v.ModuleVault, "vault_from", src["module_vault"], "scheduler", v.ModuleScheduler, "scheduler_from", src["module_scheduler"],
+		"backups", v.BackupEnabled, "backups_from", src["backup_enabled"])
 	return as
 }
 
@@ -449,18 +460,26 @@ func cmdSettings(args []string) error {
 	}
 	defer pool.Close()
 	st := store.New(pool)
-	as := appsettings.New(st, appsettings.Values{CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL})
+	as := appsettings.New(st, settingsDefaults(cfg))
 	if err := as.Load(ctx); err != nil {
 		return err
 	}
 	show := func(v appsettings.Values, src map[string]appsettings.Source) {
+		onOff := func(b bool) string {
+			if b {
+				return "on"
+			}
+			return "off"
+		}
 		fmt.Printf("  Company name: %s  (%s)\n  Public URL:   %s  (%s)\n", v.CompanyName, srcLabel(src["company_name"]), v.BaseURL, srcLabel(src["base_url"]))
+		fmt.Printf("  Vault:        %s  (%s)\n  Scheduler:    %s  (%s)\n  Backups:      %s  (%s)\n", onOff(v.ModuleVault), srcLabel(src["module_vault"]),
+			onOff(v.ModuleScheduler), srcLabel(src["module_scheduler"]), onOff(v.BackupEnabled), srcLabel(src["backup_enabled"]))
 	}
 	if args[0] == "show" {
 		show(as.Get(), as.Sources())
 		return nil
 	}
-	if src := as.Sources(); src["company_name"] == appsettings.FromEnv && src["base_url"] == appsettings.FromEnv {
+	if allFromEnv(as.Sources()) {
 		fmt.Println("Nothing was saved from the web UI, so the values from .env are already in use:")
 		show(as.Get(), as.Sources())
 		return nil
@@ -474,6 +493,15 @@ func cmdSettings(args []string) error {
 	show(v, as.Sources())
 	fmt.Println("A running Rexus picks this up within a minute.")
 	return nil
+}
+
+func allFromEnv(src map[string]appsettings.Source) bool {
+	for _, s := range src {
+		if s != appsettings.FromEnv {
+			return false
+		}
+	}
+	return true
 }
 
 func srcLabel(s appsettings.Source) string {

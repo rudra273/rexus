@@ -213,7 +213,7 @@ func (s *Server) v1Project(w http.ResponseWriter, r *http.Request, t *store.APIT
 }
 
 func (s *Server) v1NeedVault(w http.ResponseWriter) bool {
-	if !s.cfg.ModuleVault {
+	if !s.settings.Get().ModuleVault {
 		writeError(w, http.StatusNotFound, "the vault module is disabled on this Rexus")
 		return false
 	}
@@ -221,7 +221,7 @@ func (s *Server) v1NeedVault(w http.ResponseWriter) bool {
 }
 
 func (s *Server) v1NeedScheduler(w http.ResponseWriter) bool {
-	if !s.cfg.ModuleScheduler {
+	if !s.settings.Get().ModuleScheduler {
 		writeError(w, http.StatusNotFound, "the scheduler module is disabled on this Rexus")
 		return false
 	}
@@ -320,7 +320,7 @@ func (s *Server) handleV1Project(w http.ResponseWriter, r *http.Request, t *stor
 		svcs = append(svcs, toServiceV1(x))
 	}
 	resp := map[string]any{"project": toProjectV1(p), "services": svcs, "checks": checks}
-	if s.cfg.ModuleScheduler {
+	if s.settings.Get().ModuleScheduler {
 		jobs, _, err := s.v1Jobs(r, p, "", "")
 		if err != nil {
 			s.internalError(w, r, err)
@@ -328,7 +328,7 @@ func (s *Server) handleV1Project(w http.ResponseWriter, r *http.Request, t *stor
 		}
 		resp["jobs"] = jobs
 	}
-	if s.cfg.ModuleVault {
+	if s.settings.Get().ModuleVault {
 		days := 30
 		expiring, err := s.v1Secrets(r, store.SecretFilter{ProjectID: p.ID, ExpiringDays: &days}, t)
 		if err != nil {
@@ -377,7 +377,7 @@ func (s *Server) handleV1Status(w http.ResponseWriter, r *http.Request, t *store
 		"checks_unknown": unknown, "checks_paused": paused,
 		"generated_at": time.Now().UTC(),
 	}
-	if s.cfg.ModuleScheduler {
+	if s.settings.Get().ModuleScheduler {
 		_, jobs, err := s.v1Jobs(r, p, svc, env)
 		if err != nil {
 			s.internalError(w, r, err)
@@ -391,7 +391,7 @@ func (s *Server) handleV1Status(w http.ResponseWriter, r *http.Request, t *store
 		}
 		resp["jobs_total"], resp["jobs_failing"] = len(jobs), failing
 	}
-	if s.cfg.ModuleVault && env != store.ScopeNone { // every secret has an environment
+	if s.settings.Get().ModuleVault && env != store.ScopeNone { // every secret has an environment
 		days := 30
 		f := store.SecretFilter{ProjectID: p.ID, Service: svc, ExpiringDays: &days}
 		if env != "" && env != store.ScopeNone {

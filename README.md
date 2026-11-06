@@ -120,7 +120,7 @@ A section that fails to load says so instead of showing zeros. The **Projects** 
 
 Viewers can look but not change anything.
 
-Health checks run even if you turn the scheduler module off (`REXUS_MODULE_SCHEDULER=false` only hides user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
+Health checks run even if you turn the scheduler module off (switching it off only stops user cron jobs). Checks can't send custom headers yet, so point them at a URL that doesn't need a login (for example a `/health` endpoint).
 
 ## Adding many secrets at once
 
@@ -202,7 +202,7 @@ The same reference, with examples, is on the **API** page in Rexus.
 
 Backups are plain `pg_dump` copies of the whole database, written to a folder **you** choose — a local disk, an external drive, a pendrive — never inside the Rexus folder and never into git. They are off by default, so you can switch them on only on the machine that keeps them.
 
-**Turn them on** in `.env`, then restart Rexus:
+**Set the folder** in `.env`, then restart Rexus once. (`REXUS_BACKUP_ENABLED=true` turns them on from the start; or leave it off and switch backups on later, as the owner or an admin, under **Settings → Modules**, with no restart.)
 
 ```
 REXUS_BACKUP_ENABLED=true
@@ -308,7 +308,7 @@ Roles say what a person can *do*; **project access** says which projects they ca
 
 Configuration is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error.
 
-Two settings can also be changed by the **owner or an admin** in **Settings → General** (click **Edit**), with no restart: the **company name** and the **public URL**. They are saved in the database and override the `REXUS_COMPANY_NAME` and `REXUS_BASE_URL` values, which stay as the defaults ("Use the default" goes back to them). Every change is in the audit log. Everything else (the database, master key, port, backups folder, email relay, modules and the security policy) is still set in `.env` and shown read-only in **Settings**, marked *Managed on server*.
+Two settings can also be changed by the **owner or an admin** in **Settings → General** (click **Edit**), with no restart: the **company name** and the **public URL**. They are saved in the database and override the `REXUS_COMPANY_NAME` and `REXUS_BASE_URL` values, which stay as the defaults ("Use the default" goes back to them). Every change is in the audit log. **Settings → Modules** (click **Edit**) switches the **Vault**, **Jobs (scheduler)** and **Backups** on and off the same way, with no restart. They override `REXUS_MODULE_VAULT`, `REXUS_MODULE_SCHEDULER` and `REXUS_BACKUP_ENABLED`, which stay as the defaults (**Use the defaults from .env** goes back to them). A module that is off disappears from the UI and the API, and its data stays in the database: switching it back on brings it back as it was. Switching off Vault stops deploy tokens working, so apps that fetch their environment variables from Rexus at startup would fail to start; switching off Jobs stops your scheduled jobs (health checks keep running); backups can only be switched on once `REXUS_BACKUP_DIR` is set. Rexus asks you to confirm before switching anything off. Everything else (the database, master key, port, backups folder, email relay and the security policy) is still set in `.env` and shown read-only in **Settings**, marked *Managed on server*.
 
 **IP allowlist.** `REXUS_IP_ALLOWLIST` takes comma-separated IPs or ranges, e.g. `203.0.113.5,10.0.0.0/8`; `0.0.0.0` allows everyone. Localhost is always allowed. Behind a tunnel or proxy on the same machine, Rexus reads the visitor's real IP from the `CF-Connecting-IP` or `X-Forwarded-For` header — but only when the connection itself comes from a local or private address, so a direct connection from the internet can't fake it. **Docker Desktop (Mac/Windows) hides real client IPs** (everything appears to come from Docker's own gateway), so the allowlist only works there when a tunnel/proxy supplies the header; on a Linux server it sees the true address.
 

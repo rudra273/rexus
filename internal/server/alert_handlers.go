@@ -245,7 +245,7 @@ func (s *Server) handleListAlertEvents(w http.ResponseWriter, r *http.Request, a
 	}
 	out := make([]eventView, 0, len(alerts.Events))
 	for _, def := range alerts.Events {
-		if def.Key == alerts.EventBackupFailed && !s.cfg.BackupEnabled {
+		if def.Key == alerts.EventBackupFailed && !s.settings.Get().BackupEnabled {
 			continue // nothing to alert on until backups are switched on
 		}
 		v := eventView{EventDef: def, Enabled: def.DefaultEnabled}

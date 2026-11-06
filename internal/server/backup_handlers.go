@@ -13,8 +13,8 @@ import (
 
 // backupsOn answers 404 (with the reason) when backups aren't switched on.
 func (s *Server) backupsOn(w http.ResponseWriter) bool {
-	if !s.cfg.BackupEnabled {
-		writeError(w, http.StatusNotFound, "backups are disabled — set REXUS_BACKUP_ENABLED=true and REXUS_BACKUP_DIR in .env and restart Rexus")
+	if !s.settings.Get().BackupEnabled {
+		writeError(w, http.StatusNotFound, "backups are switched off — turn them on in Settings → Modules (the backup folder, REXUS_BACKUP_DIR, must be set in .env first)")
 		return false
 	}
 	return true
@@ -62,7 +62,7 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request, a *a
 	if !requireAdmin(w, a) {
 		return
 	}
-	if !s.cfg.BackupEnabled {
+	if !s.settings.Get().BackupEnabled {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 		return
 	}
@@ -120,7 +120,7 @@ func (s *Server) handleSetupBackups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "setup already completed")
 		return
 	}
-	if !s.cfg.BackupEnabled {
+	if !s.settings.Get().BackupEnabled {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "files": []any{}})
 		return
 	}
@@ -158,8 +158,8 @@ func (s *Server) handleSetupRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid setup code — check the Rexus server logs")
 		return
 	}
-	if !s.cfg.BackupEnabled {
-		writeError(w, http.StatusBadRequest, "backups are disabled — set REXUS_BACKUP_ENABLED=true and REXUS_BACKUP_DIR first")
+	if !s.settings.Get().BackupEnabled {
+		writeError(w, http.StatusBadRequest, "backups are switched off — turn them on in Settings → Modules (the backup folder, REXUS_BACKUP_DIR, must be set in .env first)")
 		return
 	}
 	path, err := s.backups.ResolveFile(in.File)

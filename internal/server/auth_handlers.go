@@ -224,10 +224,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"env":            s.cfg.Env,
 		"setup_required": !exists,
 		"two_fa_mode":    s.cfg.TwoFAMode,
-		"backup_enabled": s.cfg.BackupEnabled,
+		"backup_enabled": s.settings.Get().BackupEnabled,
 		"modules": map[string]bool{
-			"scheduler": s.cfg.ModuleScheduler,
-			"vault":     s.cfg.ModuleVault,
+			"scheduler": s.settings.Get().ModuleScheduler,
+			"vault":     s.settings.Get().ModuleVault,
 		},
 	})
 }

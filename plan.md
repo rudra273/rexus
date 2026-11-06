@@ -75,7 +75,7 @@ The same binary has two faces:
 
 **Rule:** infrastructure, secrets **and feature toggles** → env vars. Day-to-day data (projects, jobs, users, alerts) → UI (stored in DB).
 
-**Exception, started Nov 2026:** settings that can't lock anyone out may be changed by the **owner or an admin** in Settings and are saved in the DB, which overrides the env value (the env value stays the default; `rexus settings reset` clears the overrides). Built so far: company name and public URL (`internal/appsettings`). Planned, in this order: the SMTP relay (password encrypted with the master key), then the modules and backups switches. The security policy (2FA mode, lockdown, IP allowlist) stays in env for now, because a bad value there can lock everyone out.
+**Exception, started Nov 2026:** settings that can't lock anyone out may be changed by the **owner or an admin** in Settings and are saved in the DB, which overrides the env value (the env value stays the default; `rexus settings reset` clears the overrides). Built so far: company name and public URL, and the Vault / Scheduler / Backups switches (`internal/appsettings`; the module routes are always registered and answer "not found" while a module is off, and the scheduler and backup loops ask for the live value). Planned: the SMTP relay (password encrypted with the master key). The security policy (2FA mode, lockdown, IP allowlist) stays in env for now, because a bad value there can lock everyone out.
 
 | Env var | Purpose |
 |---|---|
@@ -107,9 +107,9 @@ All toggles are env vars — simple, explicit, version-controlled per deployment
 | `REXUS_2FA_MODE` | `required` \| `admins` \| `optional` \| `off` | `required`: everyone needs 2FA. `admins`: only Owner/Admin. `optional`: users choose. `off`: 2FA disabled (startup warning). |
 | `REXUS_LOGIN_OWNER_ONLY` | `false` \| `true` | **Lockdown mode** — only the Owner can log in; other sessions are revoked on start. Jobs keep running. |
 | `REXUS_IP_ALLOWLIST` | `0.0.0.0` \| comma-separated IPs/CIDRs | Who can access Rexus. `0.0.0.0` (or unset) = **allow all**. Example: `203.0.113.5,10.0.0.0/8`. |
-| `REXUS_BACKUP_ENABLED` | `false` \| `true` | Turns the backup feature on. **Not mandatory** — e.g. set only on the local machine. Requires `REXUS_BACKUP_DIR`. |
-| `REXUS_MODULE_SCHEDULER` | `true` \| `false` | Enable/disable Scheduler module (hidden from UI + API when off). |
-| `REXUS_MODULE_VAULT` | `true` \| `false` | Enable/disable Vault module (hidden from UI + API when off). |
+| `REXUS_BACKUP_ENABLED` | `false` \| `true` | Default for the backup switch (Settings → Modules can override it). Turns the backup feature on. **Not mandatory** — e.g. set only on the local machine. Requires `REXUS_BACKUP_DIR`. |
+| `REXUS_MODULE_SCHEDULER` | `true` \| `false` | Default for the Scheduler module (hidden from UI + API when off); Settings → Modules can override it. |
+| `REXUS_MODULE_VAULT` | `true` \| `false` | Default for the Vault module (hidden from UI + API when off); Settings → Modules can override it. |
 
 **Fixed rules (not toggles):**
 - **Invites:** only Owner and Admin can invite users.

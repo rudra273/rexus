@@ -472,3 +472,23 @@ func TestToolErrorIsReadable(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// Backups can be switched on and off while Rexus runs: the service asks every time.
+func TestEnabledFollowsTheLiveSwitch(t *testing.T) {
+	on := false
+	s := &Service{enabledFn: func() bool { return on }}
+	if s.Enabled() {
+		t.Fatal("switched off: Enabled() must be false")
+	}
+	if err := s.Trigger("manual", nil); err != ErrDisabled {
+		t.Fatalf("switched off: Trigger returned %v, want ErrDisabled", err)
+	}
+	on = true
+	if !s.Enabled() {
+		t.Fatal("switched on: Enabled() must follow without a restart")
+	}
+	// the plain flag (the command line) still works when no live switch is given
+	if !(&Service{enabled: true}).Enabled() || (&Service{}).Enabled() {
+		t.Fatal("the fixed flag must still be honoured")
+	}
+}

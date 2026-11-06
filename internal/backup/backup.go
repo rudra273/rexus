@@ -20,7 +20,7 @@ import (
 var (
 	ErrBusy     = errors.New("a backup or restore is already running")
 	ErrNotEmpty = errors.New("this database already has data — a restore only works into an empty database, so it can never overwrite live data")
-	ErrDisabled = errors.New("backups are disabled (set REXUS_BACKUP_ENABLED=true)")
+	ErrDisabled = errors.New("backups are switched off (turn them on in Settings → Modules)")
 	// A backup of an empty database is worse than none: after a wipe it would become the
 	// "newest" backup and be the one offered for restore.
 	ErrNothingToBackUp = errors.New("there is nothing to back up yet — Rexus has no accounts or data")
@@ -41,7 +41,10 @@ const (
 var AllowedIntervals = []int{0, 15, 60, 360, 1440}
 
 type Options struct {
-	Enabled     bool
+	Enabled bool
+	// EnabledFn, when set, is asked every time instead of Enabled, so backups can be switched on and off while
+	// Rexus runs.
+	EnabledFn   func() bool
 	Dir         string
 	DatabaseURL string
 }
@@ -51,9 +54,10 @@ type Service struct {
 	log *slog.Logger
 	al  *alerts.Service // may be nil
 
-	enabled bool
-	dir     string
-	dbURL   string
+	enabled   bool
+	enabledFn func() bool
+	dir       string
+	dbURL     string
 
 	// Names of the PostgreSQL tools (overridden in tests).
 	pgDump, pgRestore string
@@ -65,12 +69,17 @@ type Service struct {
 }
 
 func New(st *store.Store, log *slog.Logger, al *alerts.Service, o Options) *Service {
-	return &Service{st: st, log: log, al: al, enabled: o.Enabled, dir: o.Dir, dbURL: o.DatabaseURL,
+	return &Service{st: st, log: log, al: al, enabled: o.Enabled, enabledFn: o.EnabledFn, dir: o.Dir, dbURL: o.DatabaseURL,
 		pgDump: "pg_dump", pgRestore: "pg_restore", ctx: context.Background()}
 }
 
-func (s *Service) Enabled() bool { return s.enabled }
-func (s *Service) Dir() string   { return s.dir }
+func (s *Service) Enabled() bool {
+	if s.enabledFn != nil {
+		return s.enabledFn()
+	}
+	return s.enabled
+}
+func (s *Service) Dir() string { return s.dir }
 
 func (s *Service) Wait(timeout time.Duration) {
 	done := make(chan struct{})
@@ -142,7 +151,7 @@ func (s *Service) Run(ctx context.Context, trigger string, by *string) (*store.B
 
 // Trigger starts a backup in the background (the "Backup now" button, and the schedule).
 func (s *Service) Trigger(trigger string, by *string) error {
-	if !s.enabled {
+	if !s.Enabled() {
 		return ErrDisabled
 	}
 	if !s.mu.TryLock() {
@@ -213,10 +222,12 @@ func (s *Service) runLocked(ctx context.Context, trigger string, by *string) (*s
 // within 15 minutes rather than waiting a full interval.
 func (s *Service) Start(ctx context.Context) {
 	s.ctx = ctx
-	if !s.enabled {
-		return
+	if s.enabledFn == nil && !s.enabled {
+		return // switched off for good (the command line): no schedule at all
 	}
-	s.cleanPartials()
+	if s.Enabled() {
+		s.cleanPartials()
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -229,7 +240,7 @@ func (s *Service) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if time.Now().Before(begin) {
+				if time.Now().Before(begin) || !s.Enabled() {
 					continue
 				}
 				s.tick(ctx)
@@ -242,7 +253,7 @@ func (s *Service) Start(ctx context.Context) {
 			}
 		}
 	}()
-	s.log.Info("backups enabled", "folder", s.dir)
+	s.log.Info("backup scheduler started", "folder", s.dir, "enabled", s.Enabled())
 }
 
 func (s *Service) tick(ctx context.Context) {
@@ -319,7 +330,7 @@ func State(now time.Time, intervalMin int, lastSuccess *time.Time, lastAttemptFa
 }
 
 func (s *Service) Status(ctx context.Context) (*Status, error) {
-	st := &Status{Enabled: s.enabled, Dir: s.dir, Settings: s.Settings(ctx), Running: s.running.Load()}
+	st := &Status{Enabled: s.Enabled(), Dir: s.dir, Settings: s.Settings(ctx), Running: s.running.Load()}
 	last, err := s.st.LastBackupAttempt(ctx)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
@@ -338,7 +349,7 @@ func (s *Service) Status(ctx context.Context) (*Status, error) {
 		st.LastSuccessAt = &good.StartedAt
 	}
 	st.State = State(time.Now(), st.Settings.IntervalMinutes, st.LastSuccessAt, last != nil && last.Status == "failed", last != nil)
-	if s.enabled {
+	if s.Enabled() {
 		if _, at := nextRun(last, st.Settings.IntervalMinutes, time.Now()); !at.IsZero() {
 			if at.Before(time.Now()) {
 				at = time.Now()

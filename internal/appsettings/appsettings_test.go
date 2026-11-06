@@ -277,3 +277,148 @@ func TestSecureCookiesFollowsTheURL(t *testing.T) {
 		t.Fatal("secure cookies must follow the scheme of the public URL")
 	}
 }
+
+func boolp(b bool) *bool { return &b }
+
+// moduleDefaults is a typical .env: Vault and Scheduler on, backups off but a backup folder configured.
+var moduleDefaults = Values{CompanyName: "Rexus", BaseURL: "http://localhost:8080", ModuleVault: true, ModuleScheduler: true, BackupEnabled: false, BackupDirSet: true}
+
+func TestModuleSwitchesOverrideAndPersist(t *testing.T) {
+	ctx := context.Background()
+	fake := newFake()
+	s := New(fake, moduleDefaults)
+	v, err := s.Update(ctx, Patch{ModuleVault: boolp(false), BackupEnabled: boolp(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ModuleVault || !v.ModuleScheduler || !v.BackupEnabled {
+		t.Fatalf("got %+v, want vault off, scheduler left on, backups on", v)
+	}
+	src := s.Sources()
+	if src["module_vault"] != FromUI || src["backup_enabled"] != FromUI || src["module_scheduler"] != FromEnv {
+		t.Fatalf("sources %+v", src)
+	}
+
+	// a restart sees the saved switches; the .env defaults are still what "reset" returns to
+	s2 := New(fake, moduleDefaults)
+	if err := s2.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Get() != v {
+		t.Fatalf("saved switches not loaded: %+v", s2.Get())
+	}
+}
+
+func TestSwitchingOffIsSavedNotMistakenForUnset(t *testing.T) {
+	// "false" must be stored as false, not dropped like a missing value (the zero value of a bool)
+	ctx := context.Background()
+	fake := newFake()
+	s := New(fake, moduleDefaults)
+	if _, err := s.Update(ctx, Patch{ModuleScheduler: boolp(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fake.rows[key]), `"module_scheduler":false`) {
+		t.Fatalf("an explicit false must be stored, got %s", fake.rows[key])
+	}
+	s2 := New(fake, moduleDefaults)
+	if err := s2.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Get().ModuleScheduler {
+		t.Fatal("scheduler should still be off after a reload")
+	}
+}
+
+func TestResetModulesLeavesTheTextSettings(t *testing.T) {
+	ctx := context.Background()
+	s := New(newFake(), moduleDefaults)
+	if _, err := s.Update(ctx, Patch{CompanyName: str("Rosmox"), ModuleVault: boolp(false), ModuleScheduler: boolp(false)}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Update(ctx, Patch{ResetModules: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.ModuleVault || !v.ModuleScheduler || v.CompanyName != "Rosmox" {
+		t.Fatalf("got %+v, want the switches back to .env and the name kept", v)
+	}
+	if src := s.Sources(); src["module_vault"] != FromEnv || src["module_scheduler"] != FromEnv || src["company_name"] != FromUI {
+		t.Fatalf("sources %+v", src)
+	}
+}
+
+func TestResetModulesAndASwitchInOnePatch(t *testing.T) {
+	// the reset is applied first, so a switch sent with it still takes effect
+	ctx := context.Background()
+	s := New(newFake(), moduleDefaults)
+	if _, err := s.Update(ctx, Patch{ModuleVault: boolp(false), ModuleScheduler: boolp(false)}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Update(ctx, Patch{ResetModules: true, ModuleVault: boolp(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ModuleVault || !v.ModuleScheduler {
+		t.Fatalf("got %+v, want vault off (just set) and scheduler back on (reset)", v)
+	}
+}
+
+func TestBackupsNeedAFolder(t *testing.T) {
+	ctx := context.Background()
+	fake := newFake()
+	noDir := moduleDefaults
+	noDir.BackupDirSet = false
+	s := New(fake, noDir)
+
+	_, err := s.Update(ctx, Patch{BackupEnabled: boolp(true)})
+	var bad *InvalidError
+	if !errors.As(err, &bad) || !strings.Contains(bad.Msg, "REXUS_BACKUP_DIR") {
+		t.Fatalf("want an InvalidError that names REXUS_BACKUP_DIR, got %v", err)
+	}
+	if s.Get().BackupEnabled || fake.sets != 0 {
+		t.Fatal("a refused change must not apply or save anything")
+	}
+	// turning backups off never needs a folder
+	if _, err := s.Update(ctx, Patch{BackupEnabled: boolp(false)}); err != nil {
+		t.Fatalf("switching backups off should always be allowed: %v", err)
+	}
+	// and with a folder, turning them on is fine
+	if _, err := New(newFake(), moduleDefaults).Update(ctx, Patch{BackupEnabled: boolp(true)}); err != nil {
+		t.Fatalf("with a folder, backups can be turned on: %v", err)
+	}
+}
+
+func TestLoadIgnoresBackupsOnWhenTheFolderIsGone(t *testing.T) {
+	// saved as "on", then REXUS_BACKUP_DIR was removed from .env: backups must not come up half-configured
+	ctx := context.Background()
+	fake := newFake()
+	fake.rows[key] = []byte(`{"backup_enabled":true,"module_vault":false}`)
+	noDir := moduleDefaults
+	noDir.BackupDirSet = false
+	s := New(fake, noDir)
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get().BackupEnabled {
+		t.Fatal("backups can't be on without a folder")
+	}
+	if s.Get().ModuleVault {
+		t.Fatal("the other saved switch should still apply")
+	}
+	if s.Sources()["backup_enabled"] != FromEnv {
+		t.Fatal("the ignored value should report as coming from .env")
+	}
+}
+
+func TestBackupDirSetIsNeverOverridden(t *testing.T) {
+	ctx := context.Background()
+	fake := newFake()
+	fake.rows[key] = []byte(`{"BackupDirSet":false,"backup_dir_set":false}`)
+	s := New(fake, moduleDefaults)
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Get().BackupDirSet {
+		t.Fatal("whether the backup folder exists comes from .env only")
+	}
+}

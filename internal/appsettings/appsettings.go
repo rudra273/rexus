@@ -4,9 +4,10 @@
 // default, and clearing it goes back to the default. Everything that needs a setting calls Get() when it
 // needs it instead of keeping its own copy, so a change takes effect at once, without a restart.
 //
-// Only settings that cannot lock anyone out belong here: the company name and the public URL. Anything
-// needed before the database is reachable (DATABASE_URL, REXUS_MASTER_KEY, REXUS_PORT, REXUS_ENV), and the
-// security policy, stay in the environment.
+// Only settings that cannot lock anyone out belong here: the company name, the public URL and the three
+// module switches (Vault, Scheduler, Backups). Anything needed before the database is reachable
+// (DATABASE_URL, REXUS_MASTER_KEY, REXUS_PORT, REXUS_ENV), the backup folder, and the security policy, stay
+// in the environment.
 package appsettings
 
 import (
@@ -28,6 +29,15 @@ const key = "instance"
 type Values struct {
 	CompanyName string
 	BaseURL     string // "https://rexus.example.com", no trailing slash
+
+	// Module switches. A module that is off disappears from the UI and the API; its data stays in the database.
+	ModuleVault     bool // secrets, environments, and the deploy tokens that read them
+	ModuleScheduler bool // user-defined jobs (health checks always run)
+	BackupEnabled   bool // scheduled and manual backups
+
+	// BackupDirSet says whether REXUS_BACKUP_DIR is configured. It can't be changed here (it is a folder that is
+	// mounted into the container), and backups can only be turned on when it is set.
+	BackupDirSet bool
 }
 
 // SecureCookies reports whether session cookies should carry the Secure flag. It follows the public URL.
@@ -43,17 +53,28 @@ const (
 
 // overrides is what is stored: only the settings that were changed from the page. nil = use the default.
 type overrides struct {
-	CompanyName *string `json:"company_name,omitempty"`
-	BaseURL     *string `json:"base_url,omitempty"`
+	CompanyName     *string `json:"company_name,omitempty"`
+	BaseURL         *string `json:"base_url,omitempty"`
+	ModuleVault     *bool   `json:"module_vault,omitempty"`
+	ModuleScheduler *bool   `json:"module_scheduler,omitempty"`
+	BackupEnabled   *bool   `json:"backup_enabled,omitempty"`
 }
 
-func (o overrides) empty() bool { return o.CompanyName == nil && o.BaseURL == nil }
+func (o overrides) empty() bool {
+	return o.CompanyName == nil && o.BaseURL == nil && o.ModuleVault == nil && o.ModuleScheduler == nil && o.BackupEnabled == nil
+}
 
-// Patch is a change request. nil leaves a setting as it is; an empty string clears the override, so the
-// default from .env applies again; anything else is validated and saved.
+// Patch is a change request. For the two text settings, nil leaves a setting as it is, an empty string clears
+// the override (the default from .env applies again) and anything else is validated and saved. For the module
+// switches, nil leaves one as it is and true or false saves it; ResetModules clears all three at once.
 type Patch struct {
 	CompanyName *string
 	BaseURL     *string
+
+	ModuleVault     *bool
+	ModuleScheduler *bool
+	BackupEnabled   *bool
+	ResetModules    bool // applied first, so a switch given in the same patch still wins
 }
 
 // Store is the part of the database layer this package needs (the settings key/value table).
@@ -97,7 +118,13 @@ func (s *Service) Sources() map[string]Source {
 		}
 		return FromEnv
 	}
-	return map[string]Source{"company_name": src(s.over.CompanyName != nil), "base_url": src(s.over.BaseURL != nil)}
+	return map[string]Source{
+		"company_name":     src(s.over.CompanyName != nil),
+		"base_url":         src(s.over.BaseURL != nil),
+		"module_vault":     src(s.over.ModuleVault != nil),
+		"module_scheduler": src(s.over.ModuleScheduler != nil),
+		"backup_enabled":   src(s.over.BackupEnabled != nil),
+	}
 }
 
 // Load reads the saved overrides and applies them. A saved value that no longer validates is ignored (the
@@ -109,7 +136,7 @@ func (s *Service) Load(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.over = sanitize(o)
+	s.over = s.sanitize(o)
 	s.apply()
 	return nil
 }
@@ -134,6 +161,21 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.over
+	if p.ResetModules {
+		next.ModuleVault, next.ModuleScheduler, next.BackupEnabled = nil, nil, nil
+	}
+	if p.ModuleVault != nil {
+		next.ModuleVault = p.ModuleVault
+	}
+	if p.ModuleScheduler != nil {
+		next.ModuleScheduler = p.ModuleScheduler
+	}
+	if p.BackupEnabled != nil {
+		if *p.BackupEnabled && !s.defaults.BackupDirSet {
+			return Values{}, invalid("backups need a folder first: set REXUS_BACKUP_DIR in .env and restart Rexus")
+		}
+		next.BackupEnabled = p.BackupEnabled
+	}
 	if p.CompanyName != nil {
 		if *p.CompanyName == "" {
 			next.CompanyName = nil
@@ -190,13 +232,28 @@ func (s *Service) apply() Values {
 	if s.over.BaseURL != nil {
 		v.BaseURL = *s.over.BaseURL
 	}
+	if s.over.ModuleVault != nil {
+		v.ModuleVault = *s.over.ModuleVault
+	}
+	if s.over.ModuleScheduler != nil {
+		v.ModuleScheduler = *s.over.ModuleScheduler
+	}
+	if s.over.BackupEnabled != nil {
+		v.BackupEnabled = *s.over.BackupEnabled
+	}
 	s.cur.Store(&v)
 	return v
 }
 
-// sanitize drops saved values that don't validate.
-func sanitize(o overrides) overrides {
+// sanitize drops saved values that don't validate (or no longer make sense: backups saved as on, but the
+// backup folder has since been removed from .env).
+func (s *Service) sanitize(o overrides) overrides {
 	var out overrides
+	out.ModuleVault = o.ModuleVault
+	out.ModuleScheduler = o.ModuleScheduler
+	if o.BackupEnabled != nil && (!*o.BackupEnabled || s.defaults.BackupDirSet) {
+		out.BackupEnabled = o.BackupEnabled
+	}
 	if o.CompanyName != nil {
 		if v, err := ValidateCompanyName(*o.CompanyName); err == nil {
 			out.CompanyName = &v
