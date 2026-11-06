@@ -89,3 +89,26 @@ select {
   background-position: right 0.75rem center;
   background-size: 1rem;
 }
+
+/*
+ * Project card grid (react-grid-layout). The resize corner is always visible (it only exists while editing)
+ * and readable on dark, and the spot a dragged card will land in is green rather than the library's red.
+ */
+.react-grid-layout > .react-grid-item > .react-resizable-handle {
+  opacity: 1;
+  z-index: 40;
+  background-image: none;
+}
+.react-grid-layout > .react-grid-item > .react-resizable-handle::after {
+  right: 6px;
+  bottom: 6px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--color-emerald-400);
+  border-bottom: 2px solid var(--color-emerald-400);
+}
+.react-grid-layout > .react-grid-item.react-grid-placeholder {
+  background: var(--st-up);
+  opacity: 0.15;
+  border-radius: 0.5rem;
+}

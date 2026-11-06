@@ -8,10 +8,10 @@ import { fmtDuration, responseStats, uptimeOf } from '../charts'
 import { degradedReason, fmtPct } from '../health'
 import { ExpiryBadge } from '../vault'
 import { useSection, readStoredDensity, storeDensity, type CardDensity, type AllSeries, REFRESH_MS, RANGES, type RangeId, type AlertsStatus, type RecentEvent, readStoredFilter, storeFilter, isStale, scopeName, SEVERITY, type AttentionItem } from './shared'
-import { ProjectHealthCard } from './project_card'
+import { ProjectGrid } from './project_grid'
 import { AttentionPanel } from './attention'
 import { Stat, HealthTile } from './tiles'
-import { DensitySwitch, LiveStatus, RangeSwitch } from './header'
+import { LiveStatus, RangeSwitch } from './header'
 import { toIncidents, IncidentsPanel } from './incidents'
 import { OperationsPanel, failingChannels, alertsProblem } from './operations'
 import { TvBoard } from './tv_board'
@@ -288,16 +288,8 @@ export function DashboardPage() {
           ) : (
             <>
               {monitored.length > 0 && (
-                <div id="project-health" className="scroll-mt-4 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-sm font-medium text-zinc-200">Projects <span className="text-zinc-400">· {monitored.length}</span></h2>
-                    <DensitySwitch value={density} onChange={setDensity} />
-                  </div>
-                  <div className="grid grid-cols-1 gap-4">
-                    {monitored.map((p) => (
-                      <ProjectHealthCard key={p.id} project={p} checks={byProject.get(p.id) ?? []} series={series.data} now={now} range={rangeInfo} compact={density === 'compact'} />
-                    ))}
-                  </div>
+                <div id="project-health" className="scroll-mt-4">
+                  <ProjectGrid projects={monitored} byProject={byProject} series={series.data} now={now} range={rangeInfo} density={density} onDensityChange={setDensity} />
                 </div>
               )}
 

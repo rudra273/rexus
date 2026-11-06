@@ -5,6 +5,7 @@ import { NavIcon } from '../../icons'
 import { Badge, Card, StatusDot, WebsiteLink, cx, fmtTime, hostOf, timeAgo } from '../../ui'
 import { Sparkline, UptimeBar, uptimeOf } from '../charts'
 import { fmtPct, HealthBadge } from '../health'
+import { neededHeight } from './layout'
 import { type AllSeries, RANGES, isStale, SEVERITY } from './shared'
 
 /** Cards narrower than this (px of content width) switch to compact rows by themselves. */
@@ -14,27 +15,31 @@ const HIDE_ROW_UPTIME_BELOW = 360
 /** Compact cards list this many checks (worst first); the rest are summarised as "+N more". */
 const COMPACT_MAX_ROWS = 6
 
-/** Width of an element, kept up to date. Infinity until measured, so the first render uses the roomy layout. */
-function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+/** Size of an element, kept up to date. Infinity until measured, so the first render uses the roomy layout. */
+function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
   const ref = useRef<T>(null)
-  const [width, setWidth] = useState(Infinity)
+  const [size, setSize] = useState({ width: Infinity, height: Infinity })
   useEffect(() => {
     const el = ref.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    const ro = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }))
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  return [ref, width]
+  return [ref, size]
 }
 
 /**
  * One project: its uptime and, per check, a response-time line with a history strip (comfortable), or a
  * single line with the strip only (compact). The whole card opens the project; each row opens its check.
+ * On the project grid (`fill`) it fills its panel, goes compact when the panel is too short for comfortable
+ * rows, and scrolls if even that doesn't fit. While `editing` it can't be clicked, only dragged.
  */
-export function ProjectHealthCard({ project: p, checks, series, now, range, compact }: { project: Project; checks: HealthCheck[]; series: AllSeries | null; now: number; range: (typeof RANGES)[number]; compact: boolean }) {
-  const [ref, width] = useWidth<HTMLDivElement>()
-  const dense = compact || width < AUTO_COMPACT_BELOW
+export function ProjectHealthCard({ project: p, checks, series, now, range, compact, fill = false, editing = false }: { project: Project; checks: HealthCheck[]; series: AllSeries | null; now: number; range: (typeof RANGES)[number]; compact: boolean; fill?: boolean; editing?: boolean }) {
+  const [ref, { width }] = useSize<HTMLDivElement>()
+  const [panelRef, panel] = useSize<HTMLDivElement>()
+  const tooShort = fill && panel.height < neededHeight(checks.length, false)
+  const dense = compact || width < AUTO_COMPACT_BELOW || tooShort
   const sorted = [...checks].sort(
     (a, b) => Number(!a.enabled) - Number(!b.enabled) || SEVERITY[a.status] - SEVERITY[b.status] || a.name.localeCompare(b.name),
   )
@@ -44,14 +49,17 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
   const uptime = series ? uptimeOf(all) : null
   // Strip length follows the room it has, so bars stay about the same size in narrow and wide cards.
   const slots = Number.isFinite(width) ? Math.max(12, Math.min(60, Math.round((width - 250) / 7))) : 48
+  const narrow = width < AUTO_COMPACT_BELOW
+  const narrowSlots = Number.isFinite(width) ? Math.max(12, Math.min(40, Math.round(width / 7))) : 24
   return (
-    <Card className="group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500">
+    <div ref={panelRef} className={cx('relative', fill && 'h-full')}>
+    <Card className={cx('group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500', fill && 'h-full overflow-y-auto')}>
       <div ref={ref}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-1.5">
-            <Link to={`/projects/${p.key}`} data-project-link title={`Open ${p.name}`} className="group flex min-w-0 items-center gap-2.5 after:absolute after:inset-0 after:content-['']">
+            <Link to={`/projects/${p.key}`} data-project-link title={`Open ${p.name}`} className="group flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 after:absolute after:inset-0 after:content-['']">
               <StatusDot status={p.health_status} />
-              <span className="truncate text-base font-semibold text-zinc-50 group-hover:underline">{p.name}</span>
+              <span className="max-w-full truncate text-base font-semibold text-zinc-50 group-hover:underline">{p.name}</span>
               {p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} job{p.failing_jobs === 1 ? '' : 's'} failing</Badge>}
               <span className="inline-flex shrink-0 items-center gap-1 text-xs text-zinc-400 transition group-hover/card:text-zinc-100">
                 <NavIcon name="chevron" size={16} />
@@ -67,7 +75,7 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
         <div className="-mx-2 space-y-1">
           {shown.map((c) =>
             dense ? (
-              <CompactRow key={c.id} c={c} series={series} now={now} slots={slots} showUptime={width >= HIDE_ROW_UPTIME_BELOW} narrow={width < AUTO_COMPACT_BELOW} />
+              <CompactRow key={c.id} c={c} series={series} now={now} slots={narrow ? narrowSlots : slots} showUptime={width >= HIDE_ROW_UPTIME_BELOW} narrow={narrow} />
             ) : (
               <ComfortableRow key={c.id} c={c} series={series} now={now} slots={slots} />
             ),
@@ -80,6 +88,8 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
         </div>
       </div>
     </Card>
+    {editing && <div className="card-drag-handle absolute inset-0 z-30 cursor-move rounded-lg border-2 border-dashed border-emerald-500/60 bg-zinc-950/20" aria-hidden="true" />}
+    </div>
   )
 }
 
@@ -126,6 +136,23 @@ function CompactRow({ c, series, now, slots, showUptime, narrow }: { c: HealthCh
   const b = series?.series[c.id] ?? []
   const old = isStale(c, now)
   const problem = c.status !== 'up' || !c.enabled
+  const status = problem ? <HealthBadge status={c.status} paused={!c.enabled} /> : old ? <Badge tone="amber">stale</Badge> : <span title="Last response time">{c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'}</span>
+  if (narrow) {
+    return (
+      <Link to={`/checks/${c.id}`} aria-label={`Open check ${c.name}`} title={`${c.name} · last checked ${c.last_checked_at ? fmtTime(c.last_checked_at) : 'not yet'}`} className={cx(ROW, 'py-1.5 text-sm')}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-2">
+            <StatusDot status={c.enabled ? c.status : 'disabled'} />
+            <span className="truncate text-zinc-100 group-hover:underline">{c.name}</span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-zinc-400">{status}</span>
+        </div>
+        <div className={cx('mt-1', !c.enabled && 'opacity-60')}>
+          {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-2.5" paused={!c.enabled} /> : <div className="h-2.5 animate-pulse rounded bg-zinc-800/60" />}
+        </div>
+      </Link>
+    )
+  }
   return (
     <Link
       to={`/checks/${c.id}`}
@@ -134,14 +161,12 @@ function CompactRow({ c, series, now, slots, showUptime, narrow }: { c: HealthCh
       className={cx(ROW, 'flex items-center gap-2.5 py-1.5 text-sm')}
     >
       <StatusDot status={c.enabled ? c.status : 'disabled'} />
-      <span className={cx('shrink-0 truncate text-zinc-100 group-hover:underline', narrow ? 'w-20' : 'w-28')}>{c.name}</span>
+      <span className="w-28 shrink-0 truncate text-zinc-100 group-hover:underline">{c.name}</span>
       <div className={cx('min-w-0 flex-1', !c.enabled && 'opacity-60')}>
         {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-3" paused={!c.enabled} /> : <div className="h-3 animate-pulse rounded bg-zinc-800/60" />}
       </div>
       {showUptime && <span className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-400" title="Uptime in the selected range">{c.enabled ? fmtPct(series ? uptimeOf(b) : null) : '—'}</span>}
-      <span className="flex w-16 shrink-0 items-center justify-end gap-1 text-xs tabular-nums text-zinc-400">
-        {problem ? <HealthBadge status={c.status} paused={!c.enabled} /> : old ? <Badge tone="amber">stale</Badge> : <span title="Last response time">{c.last_response_ms != null ? `${c.last_response_ms} ms` : '—'}</span>}
-      </span>
+      <span className="flex w-16 shrink-0 items-center justify-end gap-1 text-xs tabular-nums text-zinc-400">{status}</span>
       <span className="shrink-0 text-zinc-600 transition group-hover:text-zinc-100"><NavIcon name="chevron" size={14} /></span>
     </Link>
   )
