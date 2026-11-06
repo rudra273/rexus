@@ -63,9 +63,13 @@ export function responseStats(buckets: SeriesBucket[]) {
   return { avg: n ? Math.round(sum / n) : null, min: min == null ? null : Math.round(min), max: max == null ? null : Math.round(max) }
 }
 
-function slotState(s: Slot): { color: string; label: string } {
+function slotState(s: Slot, since: number | null): { color: string; label: string } {
   const all = s.ok + s.fail
-  if (all === 0) return { color: 'var(--st-none)', label: 'no data' }
+  if (all === 0) {
+    // Before the check existed is not the same as a probe that never reported.
+    if (since != null && s.end <= since) return { color: 'var(--st-before)', label: 'before monitoring began' }
+    return { color: 'var(--st-none)', label: 'no data' }
+  }
   if (s.fail === 0) return { color: 'var(--st-up)', label: '100% up' }
   if (s.ok === 0) return { color: 'var(--st-down)', label: 'down' }
   return { color: 'var(--st-degraded)', label: `${((s.ok / all) * 100).toFixed(1)}% up` }
@@ -73,14 +77,15 @@ function slotState(s: Slot): { color: string; label: string } {
 
 /**
  * A row of small bars, one per time slot: green = every probe passed, amber = some failed,
- * red = all failed, grey = no data. Hovering a bar shows its time window, result and response time,
- * so colour is never the only cue.
+ * red = all failed, grey = no data, faint = before the check existed (`since`). Hovering a bar shows its time
+ * window, result and response time, so colour is never the only cue.
  */
-export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', paused }: { buckets: SeriesBucket[]; windowSeconds: number; slots?: number; height?: string; paused?: boolean }) {
+export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', paused, since }: { buckets: SeriesBucket[]; windowSeconds: number; slots?: number; height?: string; paused?: boolean; since?: string | null }) {
   const data = toSlots(buckets, windowSeconds, slots)
+  const sinceMs = since ? new Date(since).getTime() : null
   const [hover, setHover] = useState<number | null>(null)
   const h = hover != null ? data[hover] : null
-  const hs = h ? slotState(h) : null
+  const hs = h ? slotState(h, sinceMs) : null
   const frac = hover != null ? (hover + 0.5) / data.length : 0
   return (
     <div className="relative" onMouseLeave={() => setHover(null)}>
@@ -89,7 +94,7 @@ export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', 
           <div
             key={s.start}
             className={cx('min-w-0 flex-1 rounded-[3px] transition-opacity', height, hover != null && hover !== i && 'opacity-60')}
-            style={{ background: slotState(s).color }}
+            style={{ background: slotState(s, sinceMs).color }}
             onMouseEnter={() => setHover(i)}
           />
         ))}
@@ -121,7 +126,8 @@ export function UptimeBar({ buckets, windowSeconds, slots = 24, height = 'h-6', 
 
 /**
  * Response-time line for a small space (dashboard cards). Hovering shows a crosshair and the value
- * of the nearest point; failed probes are marked with red ticks along the bottom.
+ * of the nearest point; failed probes are marked with red ticks along the bottom. A lone point is drawn as a
+ * dot.
  */
 export function Sparkline({ buckets, windowSeconds, bucketSeconds, height = 44 }: { buckets: SeriesBucket[]; windowSeconds: number; bucketSeconds: number; height?: number }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -165,6 +171,10 @@ export function Sparkline({ buckets, windowSeconds, bucketSeconds, height = 44 }
         ))}
         {h && <line x1={x(h.t)} x2={x(h.t)} y1={0} y2={H} style={{ stroke: 'var(--color-zinc-500)' }} strokeWidth="1" vectorEffect="non-scaling-stroke" />}
       </svg>
+      {pts.length === 1 && (
+        // An HTML dot, because the stretched SVG would squash a circle.
+        <span className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: `${(x(pts[0].t) / W) * 100}%`, top: `${(y(pts[0].v) / H) * 100}%`, background: 'var(--chart-line)' }} />
+      )}
       {h && (
         <div
           className="pointer-events-none absolute -top-1 z-10 whitespace-nowrap rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 shadow"

@@ -315,7 +315,7 @@ function Availability({ check: c, day, events }: { check: HealthCheck; day: Seri
           {incidents} incident{incidents === 1 ? '' : 's'} · {downMs >= 60_000 ? `about ${fmtDuration(downMs)} down` : 'no downtime'}
         </span>
       </div>
-      <UptimeBar buckets={day.buckets} windowSeconds={day.window_seconds} slots={60} height="h-6" paused={!c.enabled} />
+      <UptimeBar buckets={day.buckets} windowSeconds={day.window_seconds} slots={60} height="h-6" paused={!c.enabled} since={c.created_at} />
       <div className="mt-1.5 flex justify-between text-[11px] text-zinc-500">
         <span>24h ago</span>
         <span className="hidden sm:inline">
@@ -323,6 +323,7 @@ function Availability({ check: c, day, events }: { check: HealthCheck; day: Seri
           <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-degraded)' }} />some failed
           <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-down)' }} />down
           <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-none)' }} />no data
+          <i className="ml-3 mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--st-before)' }} />before monitoring
         </span>
         <span>now</span>
       </div>

@@ -13,6 +13,8 @@
   --st-degraded: #f59e0b;
   --st-down: #ef4444;
   --st-none: #3f3f46;
+  /* Before the check existed: fainter than "no data", so a new check doesn't look like it has gaps. */
+  --st-before: #26262b;
 }
 
 :root[data-theme="light"] {
@@ -21,6 +23,7 @@
   --st-degraded: #d97706;
   --st-down: #dc2626;
   --st-none: #d4d4d8;
+  --st-before: #ececef;
 }
 
 :root[data-theme="light"] {

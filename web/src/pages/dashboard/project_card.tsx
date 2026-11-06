@@ -121,7 +121,7 @@ function ComfortableRow({ c, series, now, slots }: { c: HealthCheck; series: All
         <div className={cx(!c.enabled && 'opacity-60')}>
           <Sparkline buckets={b} windowSeconds={series.window_seconds} bucketSeconds={series.bucket_seconds} height={36} />
           <div className="mt-1">
-            <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-2" paused={!c.enabled} />
+            <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-2" paused={!c.enabled} since={c.created_at} />
           </div>
         </div>
       ) : (
@@ -148,7 +148,7 @@ function CompactRow({ c, series, now, slots, showUptime, narrow }: { c: HealthCh
           <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-zinc-400">{status}</span>
         </div>
         <div className={cx('mt-1', !c.enabled && 'opacity-60')}>
-          {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-2.5" paused={!c.enabled} /> : <div className="h-2.5 animate-pulse rounded bg-zinc-800/60" />}
+          {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-2.5" paused={!c.enabled} since={c.created_at} /> : <div className="h-2.5 animate-pulse rounded bg-zinc-800/60" />}
         </div>
       </Link>
     )
@@ -163,7 +163,7 @@ function CompactRow({ c, series, now, slots, showUptime, narrow }: { c: HealthCh
       <StatusDot status={c.enabled ? c.status : 'disabled'} />
       <span className="w-28 shrink-0 truncate text-zinc-100 group-hover:underline">{c.name}</span>
       <div className={cx('min-w-0 flex-1', !c.enabled && 'opacity-60')}>
-        {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-3" paused={!c.enabled} /> : <div className="h-3 animate-pulse rounded bg-zinc-800/60" />}
+        {series ? <UptimeBar buckets={b} windowSeconds={series.window_seconds} slots={slots} height="h-3" paused={!c.enabled} since={c.created_at} /> : <div className="h-3 animate-pulse rounded bg-zinc-800/60" />}
       </div>
       {showUptime && <span className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-400" title="Uptime in the selected range">{c.enabled ? fmtPct(series ? uptimeOf(b) : null) : '—'}</span>}
       <span className="flex w-16 shrink-0 items-center justify-end gap-1 text-xs tabular-nums text-zinc-400">{status}</span>
