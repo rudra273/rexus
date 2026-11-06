@@ -97,6 +97,12 @@ select {
  * Project card grid (react-grid-layout). The resize corner is always visible (it only exists while editing)
  * and readable on dark, and the spot a dragged card will land in is green rather than the library's red.
  */
+/* Browser zoom should settle immediately, without animating intermediate card measurements. */
+.project-health-grid:not(.project-health-grid-editing),
+.project-health-grid:not(.project-health-grid-editing) > .react-grid-item {
+  transition: none;
+}
+
 .react-grid-layout > .react-grid-item > .react-resizable-handle {
   opacity: 1;
   z-index: 40;

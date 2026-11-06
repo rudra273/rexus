@@ -33,9 +33,7 @@ export function ProjectGrid({ projects, byProject, series, now, range, canEdit }
 }) {
   const { width, containerRef, mounted } = useContainerWidth({ measureBeforeMount: true })
   const [editing, setEditing] = useState(false)
-  const { settings, syncCount, saveError, update } = useDashboardSettings(canEdit, editing)
-  // Bumped when the grid has to start over: after "Reset layout" or "Fit to content".
-  const [restart, setRestart] = useState(0)
+  const { settings, saveError, update } = useDashboardSettings(canEdit, editing)
   // How tall each card's content is, as reported by the cards themselves.
   const [contentPx, setContentPx] = useState<Record<string, number>>({})
   const reportHeight = useCallback((id: string, px: number) => setContentPx((prev) => (prev[id] === px ? prev : { ...prev, [id]: px })), [])
@@ -54,8 +52,8 @@ export function ProjectGrid({ projects, byProject, series, now, range, canEdit }
   }, [])
   const ready = gaveUp || projects.every((p) => contentPx[p.id] != null)
 
-  // The grid only reads `layout` when it starts, so it restarts (see `key` below) whenever the layout it should
-  // show changes: other projects or checks, density, a card's height in rows, a reset, or settings from elsewhere.
+  // The grid synchronizes changes to `layout` without remounting its children. Keep the cards mounted
+  // during measurement updates: remounting resets their width and can oscillate between row densities.
   const shape = projects.map((p) => `${p.id}:${(byProject.get(p.id) ?? []).length}`).join('|')
   const rows = projects.map((p) => (contentPx[p.id] != null ? rowsFor(contentPx[p.id]) : '-')).join(',')
   const layout = useMemo(
@@ -68,11 +66,9 @@ export function ProjectGrid({ projects, byProject, series, now, range, canEdit }
   const save = (l: Layout, resizedId?: string) => update({ layout: { ...saved, ...toSaved(l, saved, resizedId) } })
   const fit = (id: string) => {
     update({ layout: { ...saved, [id]: { ...saved[id], auto: true } } })
-    setRestart((n) => n + 1)
   }
   const reset = () => {
     update({ layout: {} })
-    setRestart((n) => n + 1)
   }
 
   const card = (p: Project, grid: boolean) => (
@@ -124,7 +120,7 @@ export function ProjectGrid({ projects, byProject, series, now, range, canEdit }
           (gridMode ? (
             <div className={cx(!ready && 'invisible')}>
               <ReactGridLayout
-                key={`${shape}|${rows}|${compact}|${restart}|${syncCount}`}
+                className={cx('project-health-grid', editingNow && 'project-health-grid-editing')}
                 width={width}
                 layout={layout}
                 gridConfig={{ cols: GRID_COLS, rowHeight: ROW_HEIGHT, margin: GRID_MARGIN, containerPadding: [0, 0] }}

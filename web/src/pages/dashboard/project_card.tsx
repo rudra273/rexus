@@ -55,7 +55,7 @@ export function ProjectHealthCard({ project: p, checks, series, now, range, comp
   const narrowSlots = Number.isFinite(width) ? Math.max(12, Math.min(40, Math.round(width / 7))) : 24
   return (
     <div className={cx('relative', fill && 'h-full')}>
-    <Card className={cx('group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500', fill && 'h-full overflow-y-auto')}>
+    <Card className={cx('group/card relative p-4 transition hover:border-zinc-600 has-[[data-project-link]:focus-visible]:border-emerald-500', fill && 'h-full overflow-y-auto [scrollbar-gutter:stable]')}>
       <div ref={ref}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-1.5">
