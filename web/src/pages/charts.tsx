@@ -169,10 +169,24 @@ export function Sparkline({ buckets, windowSeconds, bucketSeconds, height = 44 }
   if (pts.length === 0) {
     return <div className="flex items-center text-xs text-zinc-500" style={{ height }}>No response data yet</div>
   }
-  const top = Math.max(...pts.map((p) => p.v), 50) * 1.15
+  // Scale to the typical values, not the single worst one, so one slow probe is a clipped spike instead of
+  // flattening the rest of the line into a flat strip with a needle in it.
+  const sorted = pts.map((p) => p.v).sort((a, b) => a - b)
+  const p90 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))]
+  const top = Math.max(p90 * 1.5, 50)
   const x = (t: number) => ((t - start) / (end - start)) * W
-  const y = (v: number) => H - 2 - (v / top) * (H - 6)
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')
+  const y = (v: number) => H - 2 - (Math.min(v, top) / top) * (H - 6)
+  // Draw a softened line (3-point average, joined with curves) so the shape stays calm at any size; the
+  // hover tooltip still reports the real values.
+  const sm = pts.map((p, i) => {
+    const a = pts[Math.max(0, i - 1)].v, c = pts[Math.min(pts.length - 1, i + 1)].v
+    return { t: p.t, v: (a + 2 * p.v + c) / 4 }
+  })
+  let line = `M${x(sm[0].t).toFixed(1)},${y(sm[0].v).toFixed(1)}`
+  for (let i = 1; i < sm.length; i++) {
+    const mx = (x(sm[i - 1].t) + x(sm[i].t)) / 2
+    line += ` C${mx.toFixed(1)},${y(sm[i - 1].v).toFixed(1)} ${mx.toFixed(1)},${y(sm[i].v).toFixed(1)} ${x(sm[i].t).toFixed(1)},${y(sm[i].v).toFixed(1)}`
+  }
   const area = `${line} L${x(pts[pts.length - 1].t).toFixed(1)},${H} L${x(pts[0].t).toFixed(1)},${H} Z`
   const fails = buckets.filter((b) => b.fail > 0)
 
