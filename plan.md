@@ -597,7 +597,7 @@ GET /api/v1/env?format=json    → {"KEY": "value", …}
 
 **5. Sidebar and shared visual polish**
 - **Workspace:** Dashboard, Projects, Vault, Pings (health checks + jobs; labelled Health when the scheduler module is off).
-- **Administration:** Alerts, API & integrations, Users, Audit log, Backups.
+- **Administration:** Alerts, API & Tokens, Users, Audit log, Backups, Settings.
 - **Bottom:** Settings and a profile row with avatar/initials, name, and role. Administration and module entries remain conditional on permissions and enabled features.
 - Use a consistent outline icon set (18–20px), approximately 240px sidebar width, 40–44px navigation rows, 14px medium-weight labels, and quiet group captions.
 - Use a subtle emerald active state, consistent hover states, and visible keyboard focus. Icons supplement text labels; statuses must not rely on color alone.

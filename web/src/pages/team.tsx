@@ -115,7 +115,6 @@ export function UsersPage() {
     <>
       <PageHeader
         title="Users"
-        subtitle="Invite teammates and manage what they can do."
         actions={<Button onClick={() => setInviting(true)}>Invite user</Button>}
       />
       <ErrorBox error={error} />
@@ -514,7 +513,7 @@ export function AuditPage() {
 
   return (
     <>
-      <PageHeader title="Audit log" subtitle="Every login, secret reveal and change, newest first." />
+      <PageHeader title="Audit log" />
       <div className="mb-4 max-w-sm">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by action or person — e.g. secret. or alice@" />
       </div>

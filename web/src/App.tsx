@@ -13,7 +13,7 @@ import { ProfilePage } from './pages/profile'
 import { SettingsPage } from './pages/settings'
 import { AlertsPage } from './pages/alerts'
 import { IntegrationsPage } from './pages/integrations'
-import { BackupPill, BackupsPage, useBackupStatus } from './pages/backups'
+import { BackupsPage } from './pages/backups'
 import { AcceptInvitePage, AuditPage, ResetPasswordPage, UsersPage } from './pages/team'
 import { VaultPage } from './pages/vault'
 import { cx, Spinner } from './ui'
@@ -129,9 +129,7 @@ function Layout() {
   const { pathname } = useLocation()
   const [drawer, setDrawer] = useState(false)
   const closeRef = useRef<HTMLButtonElement>(null)
-  // The "last backup" indicator is always visible to the owner and admins when backups are on.
   const admin = !!user && isAdmin(user.role)
-  const backupStatus = useBackupStatus(admin && !!meta?.backup_enabled)
 
   const workspace: NavItem[] = [
     { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
@@ -142,10 +140,11 @@ function Layout() {
   const administration: NavItem[] = admin
     ? [
         { to: '/alerts', label: 'Alerts', icon: 'alerts' },
-        { to: '/integrations', label: 'API & integrations', icon: 'api' },
+        { to: '/integrations', label: 'API & Tokens', icon: 'api' },
         { to: '/users', label: 'Users', icon: 'users' },
         { to: '/audit', label: 'Audit log', icon: 'audit' },
         ...(meta?.backup_enabled ? [{ to: '/backups', label: 'Backups', icon: 'backups' as IconName }] : []),
+        { to: '/settings', label: 'Settings', icon: 'settings' },
       ]
     : []
 
@@ -180,8 +179,6 @@ function Layout() {
       </nav>
 
       <div className="shrink-0 space-y-1 border-t border-zinc-800 px-3 py-3">
-        <BackupPill status={backupStatus} />
-        {admin && <SideLink item={{ to: '/settings', label: 'Settings', icon: 'settings' }} />}
         <div className="flex items-center gap-1">
           <NavLink
             to="/profile"

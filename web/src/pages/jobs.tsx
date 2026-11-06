@@ -163,7 +163,7 @@ export function JobFormPage() {
 
   return (
     <>
-      <PageHeader crumbs={[{ label: 'Pings', to: '/jobs' }, { label: editing ? 'Edit job' : 'New job' }]} title={editing ? 'Edit job' : 'New job'} subtitle="An HTTP request on a schedule — ping a site or keep an API awake." />
+      <PageHeader crumbs={[{ label: 'Pings', to: '/jobs' }, { label: editing ? 'Edit job' : 'New job' }]} title={editing ? 'Edit job' : 'New job'} />
       <Card className="max-w-2xl p-5">
         <form onSubmit={submit} className="space-y-5">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

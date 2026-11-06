@@ -159,7 +159,6 @@ export function PingsPage() {
     <>
       <PageHeader
         title={scheduler ? 'Pings' : 'Health'}
-        subtitle={scheduler ? 'Health checks watch your services; jobs ping them on a schedule to keep them awake' : 'Health checks watch your services'}
         actions={writable && (
           <>
             <Link to={`/checks/new${project ? `?project=${project}` : ''}`}><Button variant={scheduler ? 'secondary' : 'primary'}>New check</Button></Link>

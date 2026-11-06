@@ -1010,7 +1010,7 @@ export function VaultPage() {
 
   return (
     <>
-      <PageHeader title="Vault" subtitle="Browse secrets by project and service. Select a folder to see its secrets. Press ⌘K to jump to one."
+      <PageHeader title="Vault"
         actions={<Button variant="secondary" onClick={() => setFinding(true)}>Quick find <span className="ml-1 text-xs text-zinc-500">⌘K</span></Button>}
       />
 

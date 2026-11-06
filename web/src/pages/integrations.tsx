@@ -51,8 +51,7 @@ export function IntegrationsPage() {
   return (
     <>
       <PageHeader
-        title="API & integrations"
-        subtitle="Tokens for the tools and apps that talk to Rexus — and the docs for using them."
+        title="API & Tokens"
       />
       <div className="mb-6 flex gap-1 border-b border-zinc-800">
         {([['tokens', 'Tokens'], ['docs', 'Docs']] as const).map(([id, label]) => (

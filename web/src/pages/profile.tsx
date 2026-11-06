@@ -30,7 +30,6 @@ export function ProfilePage() {
     <>
       <PageHeader
         title="Profile"
-        subtitle="Your own account and display settings."
         actions={<Button variant="secondary" onClick={logout}>Sign out</Button>}
       />
       <Tabs tabs={TABS} value={tab} onChange={(id) => setParams(id === 'account' ? {} : { tab: id }, { replace: true })} label="Profile sections" />

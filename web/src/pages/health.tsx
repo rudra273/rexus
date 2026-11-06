@@ -676,7 +676,7 @@ export function CheckFormPage() {
               ]
         }
         title={editing ? 'Edit health check' : 'New health check'}
-        subtitle={pickProject ? 'Watch a URL: status code, response time and SSL expiry.' : <>Project: <Link to={`/projects/${projectKey}`} className="text-zinc-300 hover:underline">{projectKey}</Link></>}
+        subtitle={pickProject ? undefined : <>Project: <Link to={`/projects/${projectKey}`} className="text-zinc-300 hover:underline">{projectKey}</Link></>}
       />
       <Card className="max-w-2xl p-5">
         <form onSubmit={submit} className="space-y-5">

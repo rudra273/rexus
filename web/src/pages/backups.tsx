@@ -177,24 +177,21 @@ export function BackupsPage() {
       <ErrorBox error={error} />
       {done && <p role="status" className="mt-2 text-sm text-emerald-400">Saved {done.name} ({fmtSize(done.size)}) to your downloads.</p>}
 
-      <div className={cx('mb-6 mt-2 rounded-md border px-4 py-3 text-sm', banner)}>
-        <div className="flex items-center gap-2 font-medium">
-          <span className={cx('inline-block h-2.5 w-2.5 rounded-full', DOT[label.tone])} />
-          {status.running
-            ? 'A backup is running…'
-            : status.state === 'none'
-              ? 'No backup has been made yet — click “Backup now”.'
-              : status.state === 'failed'
-                ? 'The last backup failed.'
-                : status.state === 'stale'
-                  ? 'It has been more than a week since the last backup.'
-                  : 'You have a recent backup.'}
+      {(status.running || status.state !== 'ok') && (
+        <div className={cx('mb-6 mt-2 rounded-md border px-4 py-3 text-sm', banner)}>
+          <div className="flex items-center gap-2 font-medium">
+            <span className={cx('inline-block h-2.5 w-2.5 rounded-full', DOT[label.tone])} />
+            {status.running
+              ? 'A backup is running…'
+              : status.state === 'none'
+                ? 'No backup has been made yet.'
+                : status.state === 'failed'
+                  ? 'The last backup failed.'
+                  : 'It has been more than a week since the last backup.'}
+          </div>
+          {status.state === 'failed' && status.last_error && <div className="mt-2 break-words text-xs">{status.last_error}</div>}
         </div>
-        <div className="mt-1 text-xs opacity-80">
-          {status.last_success_at ? <>Last good backup {timeAgo(status.last_success_at)} ({fmtTime(status.last_success_at)}).</> : null}
-        </div>
-        {status.state === 'failed' && status.last_error && <div className="mt-2 break-words text-xs">{status.last_error}</div>}
-      </div>
+      )}
 
       <section>
         <h2 className="mb-3 font-medium text-zinc-200">Recent backups</h2>

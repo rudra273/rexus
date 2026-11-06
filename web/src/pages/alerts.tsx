@@ -51,7 +51,6 @@ export function AlertsPage() {
     <>
       <PageHeader
         title="Alerts"
-        subtitle="Get told when a site goes down, a job fails, or a key or certificate is about to expire."
         actions={<Button onClick={() => setEditing({})}>Add channel</Button>}
       />
       <ErrorBox error={error} />
