@@ -253,6 +253,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/environments/{id}", vaultOn(s.authed(s.handleDeleteEnvironment)))
 	mux.HandleFunc("POST /api/environments/{id}/secrets", vaultOn(s.authed(s.handleCreateSecret)))
 	mux.HandleFunc("POST /api/environments/{id}/secrets/bulk", vaultOn(s.authed(s.handleBulkSecrets)))
+	mux.HandleFunc("POST /api/environments/{id}/secrets/copy-all", vaultOn(s.authed(s.handleCopyAllSecrets)))
 	mux.HandleFunc("POST /api/environments/{id}/secrets/delete-all", vaultOn(s.authed(s.handleDeleteAllSecrets)))
 
 	mux.HandleFunc("GET /api/secrets", vaultOn(s.authed(s.handleListSecrets)))

@@ -17,6 +17,58 @@ export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'd
 
 // ───────────────────────── project page: secrets by environment ─────────────────────────
 
+function CopyAllSecrets({ envId, name, scope }: { envId: string; name: string; scope: ServiceFilter }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const copy = async () => {
+    setMessage('')
+    setError('')
+    if (!navigator.clipboard) {
+      setError('Clipboard unavailable. Open Vault over HTTPS or localhost.')
+      return
+    }
+    setBusy(true)
+    const request = api<{ content: string; count: number; format: 'dotenv' | 'json' }>(
+      `/api/environments/${envId}/secrets/copy-all${serviceQuery(scope, '?')}`,
+      { method: 'POST' },
+    )
+    try {
+      // Start the clipboard write inside the click gesture, before the fetch finishes.
+      // Safari otherwise rejects the write after the request resolves.
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+        const blob = request.then(({ content }) => new Blob([content], { type: 'text/plain' }))
+        void blob.catch(() => {}) // A denied clipboard write may never consume the promise.
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })])
+      } else {
+        await navigator.clipboard.writeText((await request).content)
+      }
+      const { count, format } = await request
+      setMessage(`Copied ${count} ${name} ${count === 1 ? 'secret' : 'secrets'} as ${format === 'dotenv' ? '.env' : 'JSON'}`)
+    } catch {
+      try {
+        await request
+        setError('Could not write to the clipboard. Check your browser permissions and try again.')
+      } catch (err) {
+        setError((err as Error).message)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="secondary" className="py-1 text-xs" disabled={busy} onClick={copy}>
+        <Icon name="copy" /> {busy ? 'Copying…' : `Copy all · ${name}`}
+      </Button>
+      {message && <span role="status" className="text-xs text-emerald-300">{message}</span>}
+      {error && <span role="alert" className="text-xs text-red-300">{error}</span>}
+    </div>
+  )
+}
+
 export function ProjectVault({ project, services, scope, onChanged }: { project: Project; services: Service[]; scope: ServiceFilter; onChanged: () => void }) {
   const { user } = useAuth()
   const writable = !!user && canWrite(user.role)
@@ -113,7 +165,10 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-medium text-zinc-200">Secrets</h2>
         {writable && envId && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {active && secrets?.some((s) => s.environment_id === active.id) && (
+              <CopyAllSecrets key={`${active.id}:${scope}`} envId={active.id} name={active.name} scope={scope} />
+            )}
             {admin && (secrets?.length ?? 0) > 0 && (
               <Button variant="ghost" className="text-red-400 hover:!text-red-300" onClick={() => setDeletingAll(true)}>Delete all</Button>
             )}
@@ -1006,6 +1061,7 @@ export function VaultPage() {
   const deleteScope = sel.kind === 'service' ? (sel.service === PROJECT_LEVEL ? '-' : folderServiceId) : ''
   const canDeleteAll = admin && !!folderProject && scoped.length > 0 && (sel.kind !== 'service' || sel.service === PROJECT_LEVEL || folderServiceId !== '')
   const deleteChoices = [...new Map(scoped.map((s) => [s.environment_id, s.environment])).entries()].map(([id, name]) => ({ id, name, count: scoped.filter((s) => s.environment_id === id).length }))
+  const copyEnv = deleteChoices.find((choice) => choice.name === (activeEnv || (envs.length === 1 ? envs[0] : '')))
   const deleteLabel = sel.kind === 'project' ? 'the whole project, every service' : sel.kind === 'service' ? (sel.service === PROJECT_LEVEL ? 'the project itself' : `service ${sel.service}`) : ''
 
   return (
@@ -1103,7 +1159,10 @@ export function VaultPage() {
                 <span className="ml-2 text-xs font-normal text-zinc-500">{list.length} secret{list.length === 1 ? '' : 's'}</span>
               </h2>
               {writable && folderProject && (
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {copyEnv && (sel.kind !== 'service' || deleteScope) && (
+                    <CopyAllSecrets key={`${copyEnv.id}:${deleteScope}`} envId={copyEnv.id} name={copyEnv.name} scope={deleteScope} />
+                  )}
                   {canDeleteAll && <Button variant="ghost" className="py-1 text-xs text-red-400 hover:!text-red-300" onClick={() => setDeletingAll(true)}>Delete all</Button>}
                   <Button variant="secondary" className="py-1 text-xs" onClick={() => setBulk(true)}>Add multiple</Button>
                   <Button variant="secondary" className="py-1 text-xs" onClick={() => setAdding(true)}>+ Add secret here</Button>

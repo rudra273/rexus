@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -511,8 +512,75 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request, a *a
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleRevealSecret decrypts one version. It is the only place a secret
-// value leaves the server, and every call is audit-logged (reveal or copy).
+// handleCopyAllSecrets exports the latest values from one environment and service scope.
+func (s *Server) handleCopyAllSecrets(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	if !canWrite(a.user.Role) {
+		writeError(w, http.StatusForbidden, "your role can't reveal secret values")
+		return
+	}
+	env, ok := s.loadEnv(w, r)
+	if !ok {
+		return
+	}
+	scope, ok := scopeFilterParam(w, r, "service")
+	if !ok {
+		return
+	}
+	secrets, err := s.store.ListSecrets(r.Context(), store.SecretFilter{
+		EnvironmentID: env.ID, ProjectID: env.ProjectID, Service: scope, Access: s.access(r),
+	})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if len(secrets) == 0 {
+		writeError(w, http.StatusNotFound, "no secrets in this scope")
+		return
+	}
+	if len(secrets) >= envMaxSecrets {
+		writeError(w, http.StatusBadRequest, "too many secrets to copy at once; select a service")
+		return
+	}
+	values := make(map[string]string, len(secrets))
+	format := "dotenv"
+	for _, sec := range secrets {
+		if _, exists := values[sec.Name]; exists {
+			writeError(w, http.StatusConflict, fmt.Sprintf("multiple secrets are named %s; select a service to copy its values", sec.Name))
+			return
+		}
+		values[sec.Name] = ""
+		if !envNameRE.MatchString(sec.Name) {
+			format = "json"
+		}
+	}
+	for _, sec := range secrets {
+		value, err := s.openVersion(r, sec, sec.CurrentVersion)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		values[sec.Name] = value
+	}
+	var content string
+	if format == "json" {
+		data, err := json.MarshalIndent(values, "", "  ")
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		content = string(data)
+	} else {
+		content = renderDotenv(values)
+	}
+	s.audit(r, a, "secret.copy_all", "environment", env.ID, map[string]any{
+		"project": secrets[0].ProjectKey, "environment": env.Name, "scope": scope,
+		"count": len(secrets), "format": format,
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"content": content, "count": len(secrets), "format": format})
+}
+
+// handleRevealSecret decrypts one version and audit-logs the reveal or copy.
 func (s *Server) handleRevealSecret(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	if !canWrite(a.user.Role) {
 		writeError(w, http.StatusForbidden, "your role can't reveal secret values")
