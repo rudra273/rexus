@@ -120,11 +120,11 @@ export function ProjectsPage() {
 
       {projects.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-48 flex-1 sm:max-w-xs">
+          <div className="relative min-w-0 flex-[1_1_12rem] sm:max-w-xs">
             <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-zinc-500"><NavIcon name="search" size={16} /></span>
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects" aria-label="Search projects" className="pl-8" />
           </div>
-          <Select value={health} onChange={(e) => setHealth(e.target.value as HealthFilter)} aria-label="Filter by health" className="w-40">
+          <Select value={health} onChange={(e) => setHealth(e.target.value as HealthFilter)} aria-label="Filter by health" className="w-auto! max-w-full">
             <option value="all">All health</option>
             <option value="down">Down</option>
             <option value="degraded">Degraded</option>
@@ -132,12 +132,12 @@ export function ProjectsPage() {
             <option value="none">No checks</option>
             {scheduler && <option value="failing">Failing jobs</option>}
           </Select>
-          <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort projects" className="w-40">
+          <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort projects" className="w-auto! max-w-full">
             <option value="health">Sort: needs attention</option>
             <option value="name">Sort: name</option>
             <option value="recent">Sort: newest</option>
           </Select>
-          <div className="ml-auto inline-flex overflow-hidden rounded-md border border-zinc-700" role="group" aria-label="Layout">
+          <div className="ml-auto inline-flex shrink-0 overflow-hidden rounded-md border border-zinc-700" role="group" aria-label="Layout">
             {(['grid', 'list'] as const).map((v) => (
               <button
                 key={v}
