@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"rexus/internal/alerts"
+	"rexus/internal/appsettings"
 	"rexus/internal/auth"
 	"rexus/internal/backup"
 	"rexus/internal/config"
@@ -29,14 +30,17 @@ import (
 )
 
 type Server struct {
-	cfg     *config.Config
-	store   *store.Store
-	keys    *crypto.Keyring
-	engine  *scheduler.Engine
-	alerts  *alerts.Service
-	backups *backup.Service
-	log     *slog.Logger
-	version string
+	cfg *config.Config
+	// settings holds the values an owner can change from the Settings page (company name, public URL).
+	// Always read them through settings.Get() at the moment they are needed.
+	settings *appsettings.Service
+	store    *store.Store
+	keys     *crypto.Keyring
+	engine   *scheduler.Engine
+	alerts   *alerts.Service
+	backups  *backup.Service
+	log      *slog.Logger
+	version  string
 
 	setupMu   sync.Mutex
 	setupCode string // in memory only; empty once an owner exists
@@ -53,9 +57,10 @@ type Server struct {
 	useNotes   map[string]*useNote
 }
 
-func New(cfg *config.Config, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, bk *backup.Service, log *slog.Logger, version string) *Server {
+func New(cfg *config.Config, as *appsettings.Service, st *store.Store, keys *crypto.Keyring, engine *scheduler.Engine, al *alerts.Service, bk *backup.Service, log *slog.Logger, version string) *Server {
 	return &Server{
 		cfg:          cfg,
+		settings:     as,
 		store:        st,
 		keys:         keys,
 		engine:       engine,
@@ -90,7 +95,7 @@ func (s *Server) InitSetup(ctx context.Context) error {
 
 	banner := strings.Repeat("=", 60)
 	fmt.Printf("\n%s\n  REXUS SETUP MODE — no owner exists yet\n\n  Open %s/setup and enter this one-time setup code:\n\n      %s\n\n  Or create the owner from the CLI:  rexus owner create --email you@company.com\n%s\n\n",
-		banner, s.cfg.BaseURL, code, banner)
+		banner, s.settings.Get().BaseURL, code, banner)
 	return nil
 }
 
@@ -143,6 +148,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/password", s.authed(s.handleChangePassword))
 	mux.HandleFunc("POST /api/auth/logout-all", s.authed(s.handleLogoutAll))
 	mux.HandleFunc("GET /api/settings", s.authed(s.handleSettings))
+	mux.HandleFunc("PUT /api/settings", s.authed(s.handleUpdateSettings)) // owner only
 
 	// Dashboard layout and density, shared by everyone on this Rexus (anyone reads, owner / admin changes)
 	mux.HandleFunc("GET /api/dashboard/settings", s.authed(s.handleGetDashboardSettings))
@@ -311,7 +317,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
-		if s.cfg.SecureCookies() {
+		if s.settings.Get().SecureCookies() {
 			h.Set("Strict-Transport-Security", "max-age=31536000")
 		}
 		next.ServeHTTP(w, r)

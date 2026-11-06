@@ -118,12 +118,12 @@ func (s *Service) sslReminders(ctx context.Context) {
 
 // SendInvite emails an invite link (when SMTP is configured).
 func (s *Service) SendInvite(ctx context.Context, to, link, role, invitedBy string) error {
-	body := fmt.Sprintf("%s invited you to %s on Rexus as %s.\n\nSet your password and finish signing up here:\n%s\n\nThe link works once and expires in 7 days.\n", invitedBy, s.company, role, link)
-	return s.SendEmail(ctx, to, "You're invited to "+s.company+" on Rexus", body)
+	body := fmt.Sprintf("%s invited you to %s on Rexus as %s.\n\nSet your password and finish signing up here:\n%s\n\nThe link works once and expires in 7 days.\n", invitedBy, s.name(), role, link)
+	return s.SendEmail(ctx, to, "You're invited to "+s.name()+" on Rexus", body)
 }
 
 // SendPasswordReset emails a password-reset link.
 func (s *Service) SendPasswordReset(ctx context.Context, to, link, byAdmin string) error {
-	body := fmt.Sprintf("%s created a password-reset link for your %s account on Rexus:\n%s\n\nThe link works once and expires in 24 hours. If you didn't expect this, tell your administrator.\n", byAdmin, s.company, link)
+	body := fmt.Sprintf("%s created a password-reset link for your %s account on Rexus:\n%s\n\nThe link works once and expires in 24 hours. If you didn't expect this, tell your administrator.\n", byAdmin, s.name(), link)
 	return s.SendEmail(ctx, to, "Reset your Rexus password", body)
 }

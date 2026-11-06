@@ -306,7 +306,7 @@ func (s *Server) handleResetPasswordLink(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	s.audit(r, a, "user.reset_link", "user", u.ID, map[string]any{"email": u.Email})
-	link := s.cfg.BaseURL + "/reset/" + token
+	link := s.settings.Get().BaseURL + "/reset/" + token
 	resp := map[string]any{"link": link, "expires_at": expires, "emailed": false}
 	if s.alerts.SMTPConfigured() {
 		if err := s.alerts.SendPasswordReset(r.Context(), u.Email, link, a.user.Name); err != nil {
@@ -407,7 +407,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 		s.auditProject(r, a, id, "user.invite_access", "invite", inv.ID, map[string]any{"email": inv.Email, "project": keys[id]})
 	}
 	// The link is shown once — only its hash is stored. Re-invite for a new one.
-	link := s.cfg.BaseURL + "/invite/" + token
+	link := s.settings.Get().BaseURL + "/invite/" + token
 	resp := map[string]any{"invite": inv, "link": link, "emailed": false}
 	if s.alerts.SMTPConfigured() {
 		if err := s.alerts.SendInvite(r.Context(), inv.Email, link, inv.Role, a.user.Name); err != nil {
@@ -462,7 +462,7 @@ func (s *Server) handleJoinInfo(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"email": inv.Email, "role": inv.Role, "company_name": s.cfg.CompanyName})
+	writeJSON(w, http.StatusOK, map[string]any{"email": inv.Email, "role": inv.Role, "company_name": s.settings.Get().CompanyName})
 }
 
 func (s *Server) handleJoinAccept(w http.ResponseWriter, r *http.Request) {

@@ -91,7 +91,7 @@ func (s *Service) JobFailed(j *store.Job, run *store.JobRun) {
 // BackupFailed alerts that a backup could not be written. The caller sends it
 // only when backups go from working to failing, not on every retry.
 func (s *Service) BackupFailed(reason string, lastGood *time.Time) {
-	m := Message{Event: EventBackupFailed, Severity: "critical", Headline: "BACKUP FAILED — " + s.company, Link: s.Link("/backups")}
+	m := Message{Event: EventBackupFailed, Severity: "critical", Headline: "BACKUP FAILED — " + s.name(), Link: s.Link("/backups")}
 	m.Lines = []string{"Reason: " + reason, "When: " + fmtUTC(time.Now())}
 	if lastGood != nil {
 		m.Lines = append(m.Lines, "Last good backup: "+fmtUTC(*lastGood))

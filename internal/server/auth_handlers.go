@@ -169,7 +169,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.U
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.cfg.SecureCookies(),
+		Secure:   s.settings.Get().SecureCookies(),
 		SameSite: http.SameSiteLaxMode,
 	})
 	switch {
@@ -195,7 +195,7 @@ func (s *Server) loginAlert(r *http.Request, u *store.User, sessionID string) {
 
 func (s *Server) clearCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
-		Secure: s.cfg.SecureCookies(), SameSite: http.SameSiteLaxMode})
+		Secure: s.settings.Get().SecureCookies(), SameSite: http.SameSiteLaxMode})
 }
 
 // completeLogin finalizes a session after 2FA succeeds.
@@ -219,7 +219,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"company_name":   s.cfg.CompanyName,
+		"company_name":   s.settings.Get().CompanyName,
 		"version":        s.version,
 		"env":            s.cfg.Env,
 		"setup_required": !exists,
@@ -464,7 +464,7 @@ func (s *Server) handle2FASetup(w http.ResponseWriter, r *http.Request, a *authC
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"secret":      secret,
-		"otpauth_url": auth.TOTPURL("Rexus ("+s.cfg.CompanyName+")", a.user.Email, secret),
+		"otpauth_url": auth.TOTPURL("Rexus ("+s.settings.Get().CompanyName+")", a.user.Email, secret),
 	})
 }
 
@@ -549,18 +549,4 @@ func (s *Server) handle2FADisable(w http.ResponseWriter, r *http.Request, a *aut
 	a.user.TOTPEnabled = false
 	s.audit(r, a, "auth.2fa_disabled", "user", a.user.ID, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"user": a.user})
-}
-
-func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if a.user.Role != "owner" && a.user.Role != "admin" {
-		writeError(w, http.StatusForbidden, "only the owner or an admin can view instance settings")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"company_name": s.cfg.CompanyName,
-		"base_url":     s.cfg.BaseURL,
-		"version":      s.version,
-		"toggles":      s.cfg.Toggles(),
-		"smtp":         map[string]any{"configured": s.alerts.SMTPConfigured(), "host": s.alerts.SMTPHost()},
-	})
 }

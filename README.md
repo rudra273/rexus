@@ -44,7 +44,7 @@ docker compose -f docker-compose.external-db.yml up -d --build
 
 **Tailscale (private — only your team's devices).** Install Tailscale on the Rexus machine and on each device, then open `http://<machine-name>:8080`. For HTTPS inside your tailnet: `tailscale serve --bg 8080`.
 
-**Cloudflare Tunnel (public URL, login still required).** Quick test: `cloudflared tunnel --url http://localhost:8080` prints a temporary `https://….trycloudflare.com` address. For a permanent address, create a named tunnel on your own domain. Then set `REXUS_BASE_URL` to the `https://` address (this turns on secure cookies) and restart Rexus.
+**Cloudflare Tunnel (public URL, login still required).** Quick test: `cloudflared tunnel --url http://localhost:8080` prints a temporary `https://….trycloudflare.com` address. For a permanent address, create a named tunnel on your own domain. Then set the public URL to the `https://` address (this turns on secure cookies): either `REXUS_BASE_URL` in `.env` and a restart, or, as the owner or an admin, **Settings → General** (no restart).
 
 By default Docker publishes the port on all network interfaces. To keep Rexus reachable only from the same computer (e.g. when using a tunnel), change the port line in `docker-compose.yml` to `"127.0.0.1:${REXUS_PORT:-8080}:${REXUS_PORT:-8080}"`.
 
@@ -58,6 +58,8 @@ The same binary is the CLI. With Docker, prefix commands with `docker compose ex
 | `rexus owner create --email you@company.com` | Create the owner (instead of the setup screen) |
 | `rexus owner reset` | Lost password or 2FA: set a new password, reset 2FA, log out all owner sessions |
 | `rexus owner transfer --to EMAIL` | Hand ownership to another active user (you become an admin) |
+| `rexus settings show` | Show the company name and public URL in use, and whether each comes from `.env` or was saved in the web UI |
+| `rexus settings reset` | Clear the settings saved in the web UI, so the `.env` values apply again (a way back in if a bad public URL stops sign-ins) |
 | `rexus backup now` | Take a backup now (into `REXUS_BACKUP_DIR`) |
 | `rexus backup list` | List the backups in the backup folder |
 | `rexus restore --file PATH` | Restore a backup into an **empty** database |
@@ -304,7 +306,9 @@ Roles say what a person can *do*; **project access** says which projects they ca
 
 ## Configuration
 
-Everything is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error. Toggles are shown read-only in **Settings** (owner and admin), marked *Managed on server*.
+Configuration is in env vars (or `.env`); see [.env.example](.env.example). Changing a value needs a restart; invalid values stop startup with a clear error.
+
+Two settings can also be changed by the **owner or an admin** in **Settings → General** (click **Edit**), with no restart: the **company name** and the **public URL**. They are saved in the database and override the `REXUS_COMPANY_NAME` and `REXUS_BASE_URL` values, which stay as the defaults ("Use the default" goes back to them). Every change is in the audit log. Everything else (the database, master key, port, backups folder, email relay, modules and the security policy) is still set in `.env` and shown read-only in **Settings**, marked *Managed on server*.
 
 **IP allowlist.** `REXUS_IP_ALLOWLIST` takes comma-separated IPs or ranges, e.g. `203.0.113.5,10.0.0.0/8`; `0.0.0.0` allows everyone. Localhost is always allowed. Behind a tunnel or proxy on the same machine, Rexus reads the visitor's real IP from the `CF-Connecting-IP` or `X-Forwarded-For` header — but only when the connection itself comes from a local or private address, so a direct connection from the internet can't fake it. **Docker Desktop (Mac/Windows) hides real client IPs** (everything appears to come from Docker's own gateway), so the allowlist only works there when a tunnel/proxy supplies the header; on a Linux server it sees the true address.
 

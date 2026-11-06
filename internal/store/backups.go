@@ -25,6 +25,12 @@ func (s *Store) SetSetting(ctx context.Context, key string, value any) error {
 	return err
 }
 
+// DeleteSetting removes a setting, so whatever default applies is used again. Deleting one that isn't there is not an error.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.Pool.Exec(ctx, `DELETE FROM settings WHERE key = $1`, key)
+	return err
+}
+
 // ---- backup history ----
 
 type BackupRecord struct {

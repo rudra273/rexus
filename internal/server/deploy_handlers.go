@@ -31,7 +31,7 @@ func (s *Server) handleListDeployTokens(w http.ResponseWriter, r *http.Request, 
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens, "max": maxDeployTokens, "url": s.cfg.BaseURL})
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens, "max": maxDeployTokens, "url": s.settings.Get().BaseURL})
 }
 
 // handleCreateDeployToken makes a token that can read one project + environment
@@ -126,7 +126,7 @@ func (s *Server) handleCreateDeployToken(w http.ResponseWriter, r *http.Request,
 	}
 	s.audit(r, a, "token.create", "api_token", t.ID, details)
 	// The only time the token itself is ever returned.
-	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "meta": t, "url": s.cfg.BaseURL})
+	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "meta": t, "url": s.settings.Get().BaseURL})
 }
 
 // ---- GET /api/v1/env (deploy tokens only) ----

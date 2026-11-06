@@ -75,10 +75,12 @@ The same binary has two faces:
 
 **Rule:** infrastructure, secrets **and feature toggles** → env vars. Day-to-day data (projects, jobs, users, alerts) → UI (stored in DB).
 
+**Exception, started Nov 2026:** settings that can't lock anyone out may be changed by the **owner or an admin** in Settings and are saved in the DB, which overrides the env value (the env value stays the default; `rexus settings reset` clears the overrides). Built so far: company name and public URL (`internal/appsettings`). Planned, in this order: the SMTP relay (password encrypted with the master key), then the modules and backups switches. The security policy (2FA mode, lockdown, IP allowlist) stays in env for now, because a bad value there can lock everyone out.
+
 | Env var | Purpose |
 |---|---|
-| `REXUS_COMPANY_NAME` | Company name shown in the UI. |
-| `REXUS_BASE_URL` | Public URL of the instance. |
+| `REXUS_COMPANY_NAME` | Company name shown in the UI. Default; the owner can change it in Settings → General. |
+| `REXUS_BASE_URL` | Public URL of the instance. Default; the owner can change it in Settings → General. |
 | `REXUS_PORT` | Port Rexus listens on (default `8080`). |
 | `POSTGRES_PASSWORD`, `POSTGRES_HOST_PORT` | `docker-compose.yml` only: bundled Postgres password and its localhost port. |
 | `DATABASE_URL` | Any Postgres connection string. |

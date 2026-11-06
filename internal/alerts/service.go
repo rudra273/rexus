@@ -19,27 +19,32 @@ var configAAD = []byte("rexus:alert-channel")
 const maxAttempts = 3
 
 type Service struct {
-	store   *store.Store
-	keys    *crypto.Keyring
-	log     *slog.Logger
-	baseURL string
-	company string
-	smtp    SMTPConfig
-	mailer  *Mailer
-	sender  *Sender
-	wg      sync.WaitGroup
+	store *store.Store
+	keys  *crypto.Keyring
+	log   *slog.Logger
+	// identity returns the public URL and company name as they are right now. They can be changed from the
+	// Settings page while Rexus runs, so they are asked for each time and never kept.
+	identity func() (baseURL, company string)
+	smtp     SMTPConfig
+	mailer   *Mailer
+	sender   *Sender
+	wg       sync.WaitGroup
 }
 
-func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, baseURL, company string, smtp SMTPConfig) *Service {
+func New(st *store.Store, keys *crypto.Keyring, log *slog.Logger, identity func() (baseURL, company string), smtp SMTPConfig) *Service {
 	m := &Mailer{cfg: smtp}
-	return &Service{store: st, keys: keys, log: log, baseURL: baseURL, company: company, smtp: smtp, mailer: m, sender: newSender(m)}
+	return &Service{store: st, keys: keys, log: log, identity: identity, smtp: smtp, mailer: m, sender: newSender(m)}
 }
+
+// base is the current public URL, name the current company name.
+func (s *Service) base() string { b, _ := s.identity(); return b }
+func (s *Service) name() string { _, c := s.identity(); return c }
 
 func (s *Service) SMTPConfigured() bool { return s.smtp.Configured() }
 func (s *Service) SMTPHost() string     { return s.smtp.Host }
 
 // Link builds an absolute link into the Rexus UI.
-func (s *Service) Link(path string) string { return s.baseURL + path }
+func (s *Service) Link(path string) string { return s.base() + path }
 
 // Wait blocks until in-flight alerts have been delivered (or the timeout passes).
 func (s *Service) Wait(timeout time.Duration) {
@@ -198,8 +203,8 @@ func (s *Service) Test(ctx context.Context, ch *store.AlertChannel) error {
 		Event:    "test",
 		Severity: "info",
 		Headline: "Rexus test alert",
-		Lines:    []string{"If you can read this, alerts to “" + ch.Name + "” work.", s.company},
-		Link:     s.baseURL,
+		Lines:    []string{"If you can read this, alerts to “" + ch.Name + "” work.", s.name()},
+		Link:     s.base(),
 	}, ch)
 }
 

@@ -22,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"rexus/internal/alerts"
+	"rexus/internal/appsettings"
 	"rexus/internal/auth"
 	"rexus/internal/backup"
 	"rexus/internal/config"
@@ -42,6 +43,8 @@ Usage:
   rexus owner create --email EMAIL  Create the owner (prompts for password)
   rexus owner reset                 Reset the owner's password and 2FA
   rexus owner transfer --to EMAIL   Hand ownership to another active user
+  rexus settings show               Show the company name and public URL in use, and where each comes from
+  rexus settings reset              Clear settings saved from the web UI (back to the .env values)
   rexus migrate                    Run database migrations and exit
   rexus keygen                      Generate a new REXUS_MASTER_KEY
   rexus version                     Print version
@@ -67,6 +70,8 @@ func run(args []string) error {
 		return cmdServe()
 	case "owner":
 		return cmdOwner(args[1:])
+	case "settings":
+		return cmdSettings(args[1:])
 	case "backup":
 		return cmdBackup(args[1:])
 	case "restore":
@@ -143,6 +148,7 @@ func cmdServe() error {
 		return err
 	}
 	st := store.New(pool)
+	as := loadSettings(ctx, cfg, st, log)
 
 	if cfg.LoginOwnerOnly {
 		n, err := st.RevokeNonOwnerSessions(ctx)
@@ -154,16 +160,17 @@ func cmdServe() error {
 		}
 	}
 
-	al := newAlerts(cfg, st, keys, log)
+	al := newAlerts(cfg, as, st, keys, log)
 	bk := backup.New(st, log, al, backup.Options{Enabled: cfg.BackupEnabled, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
 	engine := scheduler.New(st, keys, log, cfg.ModuleScheduler, al)
-	srv := server.New(cfg, st, keys, engine, al, bk, log, version)
+	srv := server.New(cfg, as, st, keys, engine, al, bk, log, version)
 	if err := srv.InitSetup(ctx); err != nil {
 		return err
 	}
 
 	engineCtx, stopEngine := context.WithCancel(context.Background())
 	engine.Start(engineCtx)
+	go as.Watch(engineCtx, 30*time.Second) // picks up a change made from the command line
 	al.Start(engineCtx)
 	bk.Start(engineCtx)
 
@@ -177,7 +184,7 @@ func cmdServe() error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", httpSrv.Addr, "url", cfg.BaseURL)
+		log.Info("listening", "addr", httpSrv.Addr, "url", as.Get().BaseURL)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -230,6 +237,7 @@ func cmdOwner(args []string) error {
 	}
 	defer pool.Close()
 	st := store.New(pool)
+	as := loadSettings(ctx, cfg, st, log)
 
 	switch args[0] {
 	case "create":
@@ -267,9 +275,9 @@ func cmdOwner(args []string) error {
 			TargetType: "user", TargetID: u.ID, Details: map[string]any{"via": "cli"}})
 		fmt.Printf("\nOwner created: %s\n", u.Email)
 		if cfg.TwoFARequiredFor("owner") {
-			fmt.Println("Log in at", cfg.BaseURL, "— you'll be asked to set up 2FA on first login.")
+			fmt.Println("Log in at", as.Get().BaseURL, "— you'll be asked to set up 2FA on first login.")
 		} else {
-			fmt.Println("Log in at", cfg.BaseURL)
+			fmt.Println("Log in at", as.Get().BaseURL)
 		}
 		fmt.Println("(If Rexus is already running, the setup screen is now disabled automatically.)")
 		return nil
@@ -311,7 +319,7 @@ func cmdOwner(args []string) error {
 		st.Audit(ctx, store.AuditEntry{ActorUserID: &u.ID, Actor: "cli", Action: "owner.reset",
 			TargetType: "user", TargetID: u.ID})
 		fmt.Println("\nDone. Password changed, 2FA reset, all owner sessions logged out.")
-		fmt.Println("Log in at", cfg.BaseURL, "and set up 2FA again.")
+		fmt.Println("Log in at", as.Get().BaseURL, "and set up 2FA again.")
 		return nil
 
 	case "transfer":
@@ -401,10 +409,78 @@ func promptNewPassword() (string, error) {
 	}
 }
 
-func newAlerts(cfg *config.Config, st *store.Store, keys *crypto.Keyring, log *slog.Logger) *alerts.Service {
-	return alerts.New(st, keys, log, cfg.BaseURL, cfg.CompanyName, alerts.SMTPConfig{
+func newAlerts(cfg *config.Config, as *appsettings.Service, st *store.Store, keys *crypto.Keyring, log *slog.Logger) *alerts.Service {
+	identity := func() (string, string) {
+		v := as.Get()
+		return v.BaseURL, v.CompanyName
+	}
+	return alerts.New(st, keys, log, identity, alerts.SMTPConfig{
 		Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
 	})
+}
+
+// loadSettings starts the settings that can be changed from the web UI: the .env values are the defaults, and
+// whatever the owner saved in the database overrides them. If the database can't be read the defaults are used.
+func loadSettings(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) *appsettings.Service {
+	as := appsettings.New(st, appsettings.Values{CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL})
+	if err := as.Load(ctx); err != nil {
+		log.Warn("couldn't read the settings saved in the web UI; using the values from .env", "error", err)
+		return as
+	}
+	v, src := as.Get(), as.Sources()
+	log.Info("instance settings", "company", v.CompanyName, "company_from", src["company_name"], "url", v.BaseURL, "url_from", src["base_url"])
+	return as
+}
+
+// cmdSettings is the way back in if a setting saved from the web UI causes trouble (for example a public URL
+// that stops logins from working): it needs only access to the database, not a login.
+func cmdSettings(args []string) error {
+	if len(args) != 1 || (args[0] != "show" && args[0] != "reset") {
+		return errors.New("usage: rexus settings show | rexus settings reset")
+	}
+	cfg, log, err := setup()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := connect(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	st := store.New(pool)
+	as := appsettings.New(st, appsettings.Values{CompanyName: cfg.CompanyName, BaseURL: cfg.BaseURL})
+	if err := as.Load(ctx); err != nil {
+		return err
+	}
+	show := func(v appsettings.Values, src map[string]appsettings.Source) {
+		fmt.Printf("  Company name: %s  (%s)\n  Public URL:   %s  (%s)\n", v.CompanyName, srcLabel(src["company_name"]), v.BaseURL, srcLabel(src["base_url"]))
+	}
+	if args[0] == "show" {
+		show(as.Get(), as.Sources())
+		return nil
+	}
+	if src := as.Sources(); src["company_name"] == appsettings.FromEnv && src["base_url"] == appsettings.FromEnv {
+		fmt.Println("Nothing was saved from the web UI, so the values from .env are already in use:")
+		show(as.Get(), as.Sources())
+		return nil
+	}
+	v, err := as.Reset(ctx)
+	if err != nil {
+		return err
+	}
+	st.Audit(ctx, store.AuditEntry{Actor: "cli", Action: "settings.reset", TargetType: "settings"})
+	fmt.Println("Cleared the settings saved from the web UI. Rexus now uses the values from .env:")
+	show(v, as.Sources())
+	fmt.Println("A running Rexus picks this up within a minute.")
+	return nil
+}
+
+func srcLabel(s appsettings.Source) string {
+	if s == appsettings.FromUI {
+		return "saved in the web UI"
+	}
+	return "from .env"
 }
 
 func humanSize(n int64) string {
@@ -451,7 +527,8 @@ func cmdBackup(args []string) error {
 		return err
 	}
 	st := store.New(pool)
-	al := newAlerts(cfg, st, keys, log)
+	as := loadSettings(ctx, cfg, st, log)
+	al := newAlerts(cfg, as, st, keys, log)
 	bk := backup.New(st, log, al, backup.Options{Enabled: true, Dir: cfg.BackupDir, DatabaseURL: cfg.DatabaseURL})
 
 	switch args[0] {
