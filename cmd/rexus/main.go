@@ -32,10 +32,11 @@ import (
 	"rexus/internal/scheduler"
 	"rexus/internal/server"
 	"rexus/internal/store"
+	appversion "rexus/internal/version"
 )
 
-// version is set at build time: -ldflags "-X main.version=v0.1.0"
-var version = "dev"
+// version is the app version; it is set in internal/version.
+const version = appversion.Current
 
 const usage = `Rexus — self-hosted control panel for your projects
 

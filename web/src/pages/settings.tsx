@@ -67,7 +67,15 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" />
+      <PageHeader
+        title="Settings"
+        actions={
+          <span className="flex items-center gap-2 text-xs text-zinc-400">
+            {val('REXUS_ENV') === 'development' && <Badge tone="amber">Development mode</Badge>}
+            <span>Rexus <span className="mono">v{instance.version}</span></span>
+          </span>
+        }
+      />
       <Tabs tabs={tabs} value={tab} onChange={(id) => setParams(id === 'general' ? {} : { tab: id }, { replace: true })} label="Settings sections" />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="max-w-3xl space-y-4">
         {tab === 'general' && (
@@ -89,10 +97,6 @@ export function SettingsPage() {
                 <p className="text-sm text-zinc-400">You can't change these.</p>
               </>
             )}
-            <p className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-              <span>Rexus <span className="mono">{instance.version}</span></span>
-              {val('REXUS_ENV') === 'development' && <Badge tone="amber">Development mode</Badge>}
-            </p>
           </>
         )}
 
@@ -307,7 +311,7 @@ function GeneralForm({ instance, onSaved }: { instance: InstanceSettings; onSave
   const logoSrc = d.logo === undefined ? instance.look.logo_url : d.logo
   const hasCustomLogo = d.logo === undefined ? !!instance.look.logo_url : d.logo !== ''
   return (
-    <form onSubmit={submit} className="space-y-6 pb-24">
+    <form onSubmit={submit} className="space-y-6">
       <Section title="Workspace" description="How this instance is named and reached.">
         <SettingRow label="Company name" hint="Shown in the sidebar, the browser tab and emails." htmlFor="g-name">
           <Input id="g-name" value={d.name} onChange={(e) => set({ name: e.target.value })} maxLength={80} />
@@ -347,8 +351,9 @@ function GeneralForm({ instance, onSaved }: { instance: InstanceSettings; onSave
 
       <ErrorBox error={error} />
 
+      {(dirty || saved || busy) && (
       <div className="sticky bottom-4 z-10">
-        <div className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 shadow-lg transition-opacity ${dirty || saved ? 'border-zinc-700 bg-zinc-900 opacity-100' : 'pointer-events-none border-transparent opacity-0'}`}>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 shadow-lg">
           <span className="text-sm text-zinc-300" role="status">{dirty ? 'You have unsaved changes' : saved ? <span className="text-emerald-400">Saved</span> : ''}</span>
           <div className="flex items-center gap-2">
             {dirty && <Button type="button" variant="ghost" onClick={discard} disabled={busy}>Discard</Button>}
@@ -356,6 +361,7 @@ function GeneralForm({ instance, onSaved }: { instance: InstanceSettings; onSave
           </div>
         </div>
       </div>
+      )}
     </form>
   )
 }

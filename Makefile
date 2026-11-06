@@ -1,4 +1,3 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .PHONY: build web go test dev-db dev-api dev-web up down logs clean
 
@@ -9,7 +8,7 @@ web:
 	cd web && npm ci && npm run build
 
 go:
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/rexus ./cmd/rexus
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/rexus ./cmd/rexus
 
 test:
 	go vet ./... && go test ./...

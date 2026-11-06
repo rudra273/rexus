@@ -245,12 +245,12 @@ export function PageHeader({ title, subtitle, actions, crumbs }: { title: ReactN
   return (
     <div className="mb-6">
       {crumbs && <Breadcrumbs items={crumbs} />}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className={`flex min-h-9 flex-wrap justify-between gap-x-4 gap-y-2 ${subtitle ? 'items-start' : 'items-center'}`}>
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold text-zinc-50">{title}</h1>
+        <h1 className="text-xl font-semibold leading-8 text-zinc-50">{title}</h1>
         {subtitle && <div className="mt-1 text-sm text-zinc-400">{subtitle}</div>}
       </div>
-      {actions && <div className="flex flex-wrap items-start gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
     </div>
   )
