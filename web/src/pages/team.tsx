@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type AuditRow, type Invite, type Role, type SessionResp, type User } from '../api'
+import { api, type Invite, type Role, type SessionResp, type User } from '../api'
 import { useAuth } from '../auth'
 import { AccessChoice, UserAccessModal, useVisibleProjects } from './access'
 import { AuthShell, Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, fmtTime, timeAgo } from '../ui'
@@ -478,87 +478,5 @@ export function ResetPasswordPage() {
         <Button type="submit" disabled={busy} className="w-full">{busy ? 'Saving…' : 'Set password'}</Button>
       </form>
     </AuthShell>
-  )
-}
-
-// ───────────────────────── audit log ─────────────────────────
-
-export function AuditPage() {
-  const [q, setQ] = useState('')
-  const [rows, setRows] = useState<AuditRow[] | null>(null)
-  const [more, setMore] = useState(false)
-  const [open, setOpen] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (query: string, before?: number) => {
-    const p = new URLSearchParams({ limit: '100' })
-    if (query.trim()) p.set('q', query.trim())
-    if (before) p.set('before', String(before))
-    try {
-      const r = await api<{ entries: AuditRow[]; has_more: boolean }>(`/api/audit?${p}`)
-      setRows((cur) => (before && cur ? [...cur, ...r.entries] : r.entries))
-      setMore(r.has_more)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }, [])
-
-  useEffect(() => {
-    const t = setTimeout(() => load(q), 250)
-    return () => clearTimeout(t)
-  }, [q, load])
-
-  const tone = (a: string) => (a.includes('failed') || a.includes('delete') || a.includes('disable') ? 'red' : a.startsWith('secret.') ? 'sky' : 'zinc')
-
-  return (
-    <>
-      <PageHeader title="Audit log" />
-      <div className="mb-4 max-w-sm">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by action or person — e.g. secret. or alice@" />
-      </div>
-      <ErrorBox error={error} />
-      {!rows ? (
-        <Spinner />
-      ) : rows.length === 0 ? (
-        <Empty title="No matching entries" />
-      ) : (
-        <Card className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead className="border-b border-zinc-800 text-left text-xs text-zinc-500">
-              <tr>
-                <th className="px-4 py-2.5 font-medium">When</th>
-                <th className="px-4 py-2.5 font-medium">Who</th>
-                <th className="px-4 py-2.5 font-medium">Action</th>
-                <th className="px-4 py-2.5 font-medium">Details</th>
-                <th className="px-4 py-2.5 font-medium">IP</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/70">
-              {rows.map((r) => {
-                const keys = Object.keys(r.details ?? {})
-                const summary = keys.map((k) => `${k}: ${String(r.details[k])}`).join(' · ')
-                return (
-                  <tr key={r.id} className="cursor-pointer align-top hover:bg-zinc-800/30" onClick={() => setOpen(open === r.id ? null : r.id)}>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400" title={fmtTime(r.at)}>{timeAgo(r.at)}</td>
-                    <td className="px-4 py-2.5 text-zinc-300">{r.actor}</td>
-                    <td className="px-4 py-2.5"><Badge tone={tone(r.action)}>{r.action}</Badge></td>
-                    <td className="max-w-xs px-4 py-2.5 text-xs text-zinc-500">
-                      {open === r.id ? <pre className="whitespace-pre-wrap break-all mono">{JSON.stringify(r.details, null, 2)}</pre> : <span className="line-clamp-2">{summary}</span>}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-zinc-500 mono">{r.ip}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </Card>
-      )}
-      {more && rows && (
-        <div className="mt-4">
-          <Button variant="secondary" onClick={() => load(q, rows[rows.length - 1].id)}>Load older entries</Button>
-        </div>
-      )}
-    </>
   )
 }

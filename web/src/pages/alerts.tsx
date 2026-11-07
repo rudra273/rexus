@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, type AlertChannel, type AlertEventState, type AlertRecord, type ChannelType } from '../api'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
+import { Link, useSearchParams } from 'react-router-dom'
+import { NavIcon } from '../icons'
+import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 
 const TYPE_LABEL: Record<ChannelType, string> = { telegram: 'Telegram', discord: 'Discord', slack: 'Slack', email: 'Email' }
 
@@ -17,120 +19,208 @@ interface ChannelsResp {
   smtp_host: string
 }
 
+const ALERT_SECTIONS = [
+  { id: 'delivery', label: 'Delivery history' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'events', label: 'Event rules' },
+] as const
+
 export function AlertsPage() {
+  const [params] = useSearchParams()
+  const section = ALERT_SECTIONS.find((s) => s.id === params.get('view'))?.id ?? 'delivery'
   const [data, setData] = useState<ChannelsResp | null>(null)
   const [events, setEvents] = useState<AlertEventState[] | null>(null)
   const [history, setHistory] = useState<AlertRecord[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Partial<Record<typeof section, string>>>({})
+  const [ruleError, setRuleError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [editing, setEditing] = useState<{ existing?: AlertChannel } | null>(null)
 
-  const loadChannels = useCallback(() => {
-    api<ChannelsResp>('/api/alerts/channels').then(setData).catch((e) => setError(e.message))
+  const loadChannels = useCallback(async () => {
+    try {
+      setData(await api<ChannelsResp>('/api/alerts/channels'))
+      setErrors((prev) => ({ ...prev, channels: undefined }))
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, channels: (e as Error).message }))
+    }
   }, [])
-  const loadEvents = useCallback(() => {
-    api<{ events: AlertEventState[] }>('/api/alerts/events').then((r) => setEvents(r.events)).catch((e) => setError(e.message))
+  const loadEvents = useCallback(async () => {
+    try {
+      const r = await api<{ events: AlertEventState[] }>('/api/alerts/events')
+      setEvents(r.events)
+      setErrors((prev) => ({ ...prev, events: undefined }))
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, events: (e as Error).message }))
+    }
   }, [])
-  const loadHistory = useCallback(() => {
-    api<{ alerts: AlertRecord[] }>('/api/alerts/history?limit=50').then((r) => setHistory(r.alerts)).catch(() => {})
+  const loadHistory = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const r = await api<{ alerts: AlertRecord[] }>('/api/alerts/history?limit=50')
+      setHistory(r.alerts)
+      setErrors((prev) => ({ ...prev, delivery: undefined }))
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, delivery: (e as Error).message }))
+    } finally {
+      setRefreshing(false)
+    }
   }, [])
 
   useEffect(() => {
-    loadChannels()
-    loadEvents()
-    loadHistory()
-    const t = setInterval(loadHistory, 15_000)
-    return () => clearInterval(t)
+    void loadChannels()
+    void loadEvents()
+    void loadHistory()
+    const timer = setInterval(loadHistory, 15_000)
+    return () => clearInterval(timer)
   }, [loadChannels, loadEvents, loadHistory])
 
-  if (error && !data) return <ErrorBox error={error} persistent />
-  if (!data || !events) return <Spinner />
-
-  const activeChannels = data.channels.filter((c) => c.enabled).length
+  const enabledChannels = data?.channels.filter((c) => c.enabled).length
+  const failed = history?.filter((h) => h.status === 'failed').length
+  const metrics = [
+    { label: 'Active channels', value: data ? `${enabledChannels} / ${data.channels.length}` : '—', hint: 'Enabled destinations' },
+    { label: 'Sent', value: history ? history.length - (failed ?? 0) : '—', hint: 'Last 50 deliveries' },
+    { label: 'Failed', value: failed ?? '—', hint: 'Last 50 deliveries' },
+  ]
+  const channelChanged = () => { void loadChannels(); void loadHistory() }
 
   return (
     <>
       <PageHeader
         title="Alerts"
+        subtitle="Manage notification destinations, event rules, and delivery."
         actions={<Button onClick={() => setEditing({})}>Add channel</Button>}
       />
-      <ErrorBox error={error} />
 
-      <section className="mt-2">
-        <h2 className="mb-3 font-medium text-zinc-200">Channels</h2>
-        {data.channels.length === 0 ? (
-          <Empty title="No channels yet">Add Telegram, Discord, Slack or email. Alerts go to every enabled channel, with the project and a link back here.</Empty>
-        ) : (
-          <div className="space-y-2">
-            {data.channels.map((c) => (
-              <ChannelRow key={c.id} channel={c} onEdit={() => setEditing({ existing: c })} onChanged={() => { loadChannels(); loadHistory() }} />
-            ))}
-          </div>
-        )}
-        {data.channels.length > 0 && activeChannels === 0 && (
-          <p className="mt-2 text-sm text-amber-300">All channels are switched off — no alerts will be sent.</p>
-        )}
-      </section>
-
-      <section className="mt-8">
-        <h2 className="mb-1 font-medium text-zinc-200">What to alert on</h2>
-        <p className="mb-3 text-sm text-zinc-500">Each alert is sent once when something changes — not on every failed check.</p>
-        <Card className="divide-y divide-zinc-800/70">
-          {events.map((e) => (
-            <EventRow key={e.key} event={e} onError={setError} onSaved={loadEvents} />
-          ))}
-        </Card>
-      </section>
-
-      <section className="mt-8">
-        <h2 className="mb-3 font-medium text-zinc-200">Recent alerts</h2>
-        {!history ? (
-          <Spinner />
-        ) : history.length === 0 ? (
-          <Empty title="Nothing sent yet">Use “Test” on a channel to check that it works.</Empty>
-        ) : (
-          <Card className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead className="border-b border-zinc-800 text-left text-xs text-zinc-500">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">When</th>
-                  <th className="px-4 py-2.5 font-medium">Alert</th>
-                  <th className="px-4 py-2.5 font-medium">Channel</th>
-                  <th className="px-4 py-2.5 font-medium">Result</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/70">
-                {history.map((h) => (
-                  <tr key={h.id} className="align-top">
-                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400" title={fmtTime(h.at)}>{timeAgo(h.at)}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="text-zinc-200">{h.title}</div>
-                      <div className="text-xs text-zinc-500 mono">{h.event}</div>
-                    </td>
-                    <td className="px-4 py-2.5 text-zinc-300">{h.channel_name}</td>
-                    <td className="px-4 py-2.5">
-                      {h.status === 'sent' ? <Badge tone="green">sent</Badge> : <Badge tone="red">failed</Badge>}
-                      {h.error && <div className="mt-1 max-w-xs text-xs text-red-300">{h.error}</div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+        {metrics.map((metric) => (
+          <Card key={metric.label} className="px-4 py-3">
+            <div className="text-xs font-medium text-zinc-400">{metric.label}</div>
+            <div className={cx('mt-1 text-xl font-semibold tabular-nums', metric.label === 'Failed' && failed ? 'text-red-300' : 'text-zinc-50')}>{metric.value}</div>
+            <div className="mt-0.5 text-xs text-zinc-500">{metric.hint}</div>
           </Card>
-        )}
-      </section>
+        ))}
+      </div>
+
+      {enabledChannels === 0 && (
+        <div className="mb-4 rounded-md border border-amber-900 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          {data?.channels.length ? 'All channels are turned off.' : 'No notification channels are configured.'}{' '}
+          <Link to="?view=channels" className="font-medium underline underline-offset-2">Manage channels</Link>
+        </div>
+      )}
+
+      <nav aria-label="Alert settings" className="mb-5 flex flex-wrap gap-x-5 border-b border-zinc-800">
+        {ALERT_SECTIONS.map(({ id, label }) => (
+          <Link
+            key={id}
+            to={id === 'delivery' ? '/alerts' : `?view=${id}`}
+            aria-current={section === id ? 'page' : undefined}
+            className={cx('border-b-2 px-1 py-2.5 text-sm font-medium', section === id ? 'border-emerald-500 text-zinc-100' : 'border-transparent text-zinc-400 hover:text-zinc-100')}
+          >{label}</Link>
+        ))}
+      </nav>
+
+      <ErrorBox error={errors[section] ?? null} persistent />
+      {section === 'delivery' && <DeliveryHistory history={history} refreshing={refreshing} reload={loadHistory} />}
+      {section === 'channels' && (
+        <section aria-label="Channels">
+          <h2 className="mb-1 text-sm font-medium text-zinc-100">Notification destinations</h2>
+          <p className="mb-3 text-sm text-zinc-400">Manage delivery, send a test, or configure Telegram’s daily digest and /status.</p>
+          {!data ? (errors.channels ? null : <Spinner />) : data.channels.length === 0 ? (
+            <Empty title="No channels yet">Add Telegram, Discord, Slack or email to receive alerts.</Empty>
+          ) : (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {data.channels.map((c) => (
+                <ChannelRow key={c.id} channel={c} onEdit={() => setEditing({ existing: c })} onChanged={channelChanged} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      {section === 'events' && (
+        <section aria-label="Event rules">
+          <h2 className="mb-1 text-sm font-medium text-zinc-100">What triggers an alert</h2>
+          <p className="mb-3 text-sm text-zinc-400">Enabled events go to every active channel.</p>
+          <ErrorBox error={ruleError} />
+          {events ? (
+            <Card className="divide-y divide-zinc-800/70">
+              {events.map((event) => <EventRow key={event.key} event={event} onError={setRuleError} onSaved={loadEvents} />)}
+            </Card>
+          ) : errors.events ? null : <Spinner />}
+        </section>
+      )}
 
       {editing && (
         <ChannelModal
           existing={editing.existing}
-          smtp={data.smtp_configured}
+          smtp={data?.smtp_configured ?? false}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null)
-            loadChannels()
+            void loadChannels()
           }}
         />
       )}
     </>
+  )
+}
+
+function DeliveryHistory({ history, refreshing, reload }: { history: AlertRecord[] | null; refreshing: boolean; reload: () => void }) {
+  const [result, setResult] = useState('')
+  const [channel, setChannel] = useState('')
+  const destinations = [...new Set(history?.map((h) => h.channel_name))].sort()
+  const activeChannel = destinations.includes(channel) ? channel : ''
+  const shown = history?.filter((h) => (!result || h.status === result) && (!activeChannel || h.channel_name === activeChannel))
+
+  return (
+    <section aria-label="Delivery history">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-zinc-100">Recent deliveries</h2>
+          <p className="mt-1 text-xs text-zinc-400">{history ? `${shown?.length} of ${history.length} recent deliveries` : 'Up to 50 recent deliveries'}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select className="w-auto! max-w-full" aria-label="Filter by delivery result" value={result} onChange={(e) => setResult(e.target.value)}>
+            <option value="">All results</option>
+            <option value="sent">Sent</option>
+            <option value="failed">Failed</option>
+          </Select>
+          <Select className="w-auto! max-w-full" aria-label="Filter by channel" value={activeChannel} onChange={(e) => setChannel(e.target.value)}>
+            <option value="">All channels</option>
+            {destinations.map((name) => <option key={name}>{name}</option>)}
+          </Select>
+          <Button variant="secondary" disabled={refreshing} onClick={reload}><NavIcon name="refresh" size={15} /> Refresh</Button>
+        </div>
+      </div>
+      {!shown ? (refreshing ? <Spinner /> : null) : shown.length === 0 ? (
+        <Empty title={history?.length ? 'No matching deliveries' : 'No deliveries yet'}>
+          {history?.length ? 'Try a different channel or result.' : <>Use <b>Send test</b> on the <Link to="?view=channels" className="text-emerald-400 hover:underline">Channels</Link> tab to verify delivery.</>}
+        </Empty>
+      ) : (
+        <Card className="overflow-x-auto">
+          <table className="w-full min-w-[600px] text-left text-sm">
+            <thead className="border-b border-zinc-800 bg-zinc-900/70 text-xs text-zinc-400">
+              <tr>{['Alert', 'Channel', 'Result', 'When'].map((heading) => <th key={heading} scope="col" className="px-4 py-2.5 font-medium">{heading}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {shown.map((h) => (
+                <tr key={h.id} className="align-top hover:bg-zinc-800/25">
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-zinc-200">{h.title}</div>
+                    <div className="mt-0.5 text-xs text-zinc-500">{h.event}{h.project_key && ` · ${h.project_key}`}</div>
+                  </td>
+                  <td className="px-4 py-3 text-zinc-300">{h.channel_name}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={h.status === 'sent' ? 'green' : 'red'}>{h.status === 'sent' ? 'Sent' : 'Failed'}</Badge>
+                    {h.error && <div className="mt-1 max-w-xs break-words text-xs text-red-300">{h.error}</div>}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-xs text-zinc-400" title={fmtTime(h.at)}>{timeAgo(h.at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </section>
   )
 }
 
@@ -168,26 +258,31 @@ function ChannelRow({ channel: c, onEdit, onChanged }: { channel: AlertChannel; 
     onChanged()
   }
 
-  const link = 'text-xs text-zinc-400 hover:text-zinc-100'
   return (
-    <Card className={cx('px-4 py-3', !c.enabled && 'opacity-70')}>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-zinc-100">{c.name}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="break-words font-medium text-zinc-100">{c.name}</h3>
             <Badge tone="sky">{TYPE_LABEL[c.type]}</Badge>
-            {!c.enabled && <Badge>off</Badge>}
+            <Badge tone={c.enabled ? 'green' : 'zinc'}>{c.enabled ? 'Active' : 'Off'}</Badge>
           </div>
-          <div className="mt-0.5 truncate text-xs text-zinc-500 mono">{c.summary}</div>
-          {c.digest?.time && <div className="mt-1 text-xs text-zinc-400">Daily digest · {c.digest.time} · {c.digest.timezone}</div>}
-          {c.command_chat_id && <div className="mt-1 text-xs text-zinc-400">/status enabled for chat {c.command_chat_id}</div>}
+          <div className="mt-1 break-words text-xs text-zinc-400">{c.summary}</div>
         </div>
-        <div className="flex items-center gap-4">
-          <button className={link} onClick={runTest} disabled={test === 'sending'}>{test === 'sending' ? 'Sending…' : 'Send test'}</button>
-          <button className={link} onClick={toggle}>{c.enabled ? 'Turn off' : 'Turn on'}</button>
-          <button className={link} onClick={onEdit}>Edit</button>
-          <button className={cx(link, 'hover:!text-red-400')} onClick={remove}>Delete</button>
-        </div>
+        <ActionMenu label={`More actions for ${c.name}`} items={[
+          { label: c.enabled ? 'Turn off' : 'Turn on', onClick: toggle },
+          { label: 'Delete channel', onClick: remove, danger: true },
+        ]} />
+      </div>
+      {c.type === 'telegram' && (
+        <dl className="mt-4 space-y-2 rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2.5 text-xs">
+          <div className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-zinc-400">Daily digest</dt><dd className="text-zinc-200">{c.digest?.time ? `${c.digest.time} · ${c.digest.timezone}` : 'Off'}</dd></div>
+          <div className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-zinc-400">/status replies</dt><dd className="text-zinc-200">{c.command_chat_id ? `Chat ${c.command_chat_id}` : 'Off'}</dd></div>
+        </dl>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={onEdit}>Configure</Button>
+        <Button variant="ghost" onClick={runTest} disabled={test === 'sending'}>{test === 'sending' ? 'Sending…' : 'Send test'}</Button>
       </div>
       {test !== 'idle' && test !== 'sending' && (
         <div className={cx('mt-2 text-xs', test.ok ? 'text-emerald-400' : 'text-red-300')}>

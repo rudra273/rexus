@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import { applyAccent, type Look } from '../brand'
 import { timezoneList } from '../prefs'
+import { DataSettings } from './settings_data'
 import { Badge, Button, Card, ErrorBox, Input, Modal, PageHeader, Select, Spinner, Tabs } from '../ui'
 
 interface InstanceSettings {
@@ -33,7 +34,7 @@ interface Modules {
   backups: boolean
 }
 
-type Tab = 'general' | 'modules' | 'security' | 'notifications'
+type Tab = 'general' | 'modules' | 'security' | 'notifications' | 'data'
 
 /**
  * App-wide configuration. The company name and public URL can be changed here by the owner or an admin (saved in the
@@ -55,6 +56,7 @@ export function SettingsPage() {
     { id: 'modules', label: 'Modules' },
     { id: 'security', label: 'Security policy' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'data', label: 'Data' },
   ]
   const requested = params.get('tab')
   const tab: Tab = tabs.some((t) => t.id === requested) ? (requested as Tab) : 'general'
@@ -132,6 +134,8 @@ export function SettingsPage() {
           </Card>
           </>
         )}
+
+        {tab === 'data' && <DataSettings />}
 
         {tab === 'notifications' && (
           <>

@@ -71,10 +71,3 @@ func (s *Store) RevokeNonOwnerSessions(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
-
-// PruneSessions deletes sessions that expired or were revoked over a week ago.
-func (s *Store) PruneSessions(ctx context.Context) error {
-	_, err := s.Pool.Exec(ctx, `DELETE FROM sessions
-		WHERE expires_at < now() - interval '7 days' OR revoked_at < now() - interval '7 days'`)
-	return err
-}

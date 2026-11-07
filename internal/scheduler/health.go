@@ -15,7 +15,6 @@ import (
 
 const (
 	healthUserAgent  = "Rexus-Health/1.0"
-	healthRetention  = 30 * 24 * time.Hour
 	healthBatchLimit = 20
 )
 

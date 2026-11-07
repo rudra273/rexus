@@ -709,10 +709,23 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, a *authCtx)
 		}
 		before = n
 	}
-	rows, err := s.store.ListAudit(r.Context(), strings.TrimSpace(q.Get("q")), before, limit, s.access(r))
+	var since time.Time
+	if v := q.Get("days"); v != "" {
+		days, err := strconv.Atoi(v)
+		if err != nil || days < 1 || days > 365 {
+			writeError(w, http.StatusBadRequest, "days must be between 1 and 365")
+			return
+		}
+		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	}
+	rows, err := s.store.ListAudit(r.Context(), strings.TrimSpace(q.Get("q")), q.Get("category"), since, before, limit+1, s.access(r))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "has_more": len(rows) == limit})
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "has_more": hasMore})
 }

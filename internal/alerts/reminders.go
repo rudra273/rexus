@@ -11,7 +11,6 @@ import (
 const (
 	reminderStartDelay = 20 * time.Second
 	reminderInterval   = time.Hour
-	alertRetention     = 90 * 24 * time.Hour
 )
 
 // Start runs the expiry reminders (secrets and SSL certificates) shortly
@@ -30,9 +29,6 @@ func (s *Service) Start(ctx context.Context, modules func() SummaryModules) {
 				return
 			case <-timer.C:
 				s.RunReminders(ctx)
-				if err := s.store.PruneAlerts(ctx, alertRetention); err != nil {
-					s.log.Error("alerts: prune log", "err", err)
-				}
 				timer.Reset(reminderInterval)
 			}
 		}

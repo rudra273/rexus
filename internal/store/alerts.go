@@ -181,11 +181,6 @@ func (s *Store) AlertDeliveryState(ctx context.Context, dedupeKey, channelID str
 	return sent, failures, err
 }
 
-func (s *Store) PruneAlerts(ctx context.Context, olderThan time.Duration) error {
-	_, err := s.Pool.Exec(ctx, `DELETE FROM alerts_sent WHERE at < $1`, time.Now().Add(-olderThan))
-	return err
-}
-
 // KnownDevice reports whether this user has fully logged in before from the
 // same IP address and browser (other than the session in excludeSessionID).
 func (s *Store) KnownDevice(ctx context.Context, userID, ip, userAgent, excludeSessionID string) (bool, error) {

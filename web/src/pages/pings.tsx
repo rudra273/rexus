@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, canWrite, type HealthCheck, type Job } from '../api'
 import { useAuth } from '../auth'
+import { SystemJobs } from './system_jobs'
 import { Badge, Button, Card, Empty, ErrorBox, PageHeader, Select, Spinner, StatusDot, cx, timeAgo } from '../ui'
 import { fmtPct, HealthBadge } from './health'
 import { EnvBadge, ServiceBadge } from './services'
@@ -267,6 +268,7 @@ export function PingsPage() {
           )}
         </>
       )}
+      {user && (user.role === 'owner' || user.role === 'admin') && type !== 'check' && type !== 'job' && !filtered && <SystemJobs />}
     </>
   )
 }

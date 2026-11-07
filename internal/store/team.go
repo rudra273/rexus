@@ -322,7 +322,7 @@ type AuditRow struct {
 
 // ListAudit returns entries newest first. q matches the action prefix or part
 // of the actor; before is an entry ID for paging (0 = from the newest).
-func (s *Store) ListAudit(ctx context.Context, q string, before int64, limit int, a Access) ([]*AuditRow, error) {
+func (s *Store) ListAudit(ctx context.Context, q, category string, since time.Time, before int64, limit int, a Access) ([]*AuditRow, error) {
 	where := []string{"true"}
 	args := []any{}
 	if before > 0 {
@@ -334,6 +334,14 @@ func (s *Store) ListAudit(ctx context.Context, q string, before int64, limit int
 		n := len(args)
 		p := "$" + strconv.Itoa(n) + "::text"
 		where = append(where, "(action ILIKE "+p+" || '%' OR actor ILIKE '%' || "+p+" || '%')")
+	}
+	if category != "" {
+		args = append(args, category)
+		where = append(where, "split_part(action, '.', 1) = $"+strconv.Itoa(len(args)))
+	}
+	if !since.IsZero() {
+		args = append(args, since)
+		where = append(where, "at >= $"+strconv.Itoa(len(args)))
 	}
 	// Entries about a project only show to people who can see that project;
 	// team and account entries (no project) show to everyone who can read the log.

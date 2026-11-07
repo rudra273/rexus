@@ -174,6 +174,7 @@ func cmdServe() error {
 
 	engineCtx, stopEngine := context.WithCancel(context.Background())
 	engine.Start(engineCtx)
+	srv.Retention().Start(engineCtx)
 	go as.Watch(engineCtx, 30*time.Second) // picks up a change made from the command line
 	al.Start(engineCtx, func() alerts.SummaryModules {
 		v := as.Get()

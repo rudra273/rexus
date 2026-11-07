@@ -442,11 +442,6 @@ func (s *Store) AllChecksSeries(ctx context.Context, a Access, window, bucket ti
 	return out, rows.Err()
 }
 
-func (s *Store) PruneHealthResults(ctx context.Context, olderThan time.Duration) error {
-	_, err := s.Pool.Exec(ctx, `DELETE FROM health_results WHERE checked_at < $1`, time.Now().Add(-olderThan))
-	return err
-}
-
 // SetCheckEnabled pauses or resumes one check. Resuming schedules it for an immediate probe.
 func (s *Store) SetCheckEnabled(ctx context.Context, id string, enabled bool) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE health_checks SET enabled = $2,

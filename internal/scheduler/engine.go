@@ -22,7 +22,6 @@ import (
 const (
 	pollInterval   = 5 * time.Second
 	maxConcurrent  = 10
-	runRetention   = 30 * 24 * time.Hour
 	snippetMaxSize = 500
 	userAgent      = "Rexus-Scheduler/1.0"
 )
@@ -69,10 +68,7 @@ func (e *Engine) Start(ctx context.Context) {
 		defer e.wg.Done()
 		poll := time.NewTicker(pollInterval)
 		defer poll.Stop()
-		prune := time.NewTicker(time.Hour)
-		defer prune.Stop()
 
-		e.housekeeping(ctx)
 		e.tickAll(ctx)
 		for {
 			select {
@@ -80,8 +76,6 @@ func (e *Engine) Start(ctx context.Context) {
 				return
 			case <-poll.C:
 				e.tickAll(ctx)
-			case <-prune.C:
-				e.housekeeping(ctx)
 			}
 		}
 	}()
@@ -110,18 +104,6 @@ func (e *Engine) tickAll(ctx context.Context) {
 		e.tick(ctx)
 	}
 	e.tickHealth(ctx)
-}
-
-func (e *Engine) housekeeping(ctx context.Context) {
-	if err := e.store.PruneRuns(ctx, runRetention); err != nil {
-		e.log.Error("scheduler: prune runs", "err", err)
-	}
-	if err := e.store.PruneHealthResults(ctx, healthRetention); err != nil {
-		e.log.Error("scheduler: prune health results", "err", err)
-	}
-	if err := e.store.PruneSessions(ctx); err != nil {
-		e.log.Error("scheduler: prune sessions", "err", err)
-	}
 }
 
 func (e *Engine) tick(ctx context.Context) {

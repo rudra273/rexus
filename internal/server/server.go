@@ -24,6 +24,7 @@ import (
 	"rexus/internal/backup"
 	"rexus/internal/config"
 	"rexus/internal/crypto"
+	"rexus/internal/retention"
 	"rexus/internal/scheduler"
 	"rexus/internal/store"
 	"rexus/web"
@@ -53,6 +54,7 @@ type Server struct {
 	// Public API (/api/v1)
 	tokenFails *auth.Limiter // invalid API tokens, per IP
 	tokenRate  *rateLimiter  // requests per minute, per token
+	retention  *retention.Service
 	useMu      sync.Mutex
 	useNotes   map[string]*useNote
 }
@@ -66,6 +68,7 @@ func New(cfg *config.Config, as *appsettings.Service, st *store.Store, keys *cry
 		engine:       engine,
 		alerts:       al,
 		backups:      bk,
+		retention:    retention.New(st, log),
 		log:          log,
 		version:      version,
 		loginLimiter: auth.NewLimiter(5, 15*time.Minute),
@@ -118,6 +121,9 @@ func (s *Server) clearSetupCode() {
 }
 
 // Handler builds the full HTTP handler: API routes, embedded UI, middleware.
+// Retention is the cleanup service; main starts its hourly loop.
+func (s *Server) Retention() *retention.Service { return s.retention }
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -149,6 +155,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout-all", s.authed(s.handleLogoutAll))
 	mux.HandleFunc("GET /api/settings", s.authed(s.handleSettings))
 	mux.HandleFunc("PUT /api/settings", s.authed(s.handleUpdateSettings)) // owner only
+	// Data retention: admins read, only the owner changes or runs it.
+	mux.HandleFunc("GET /api/retention", s.authed(s.handleRetention))
+	mux.HandleFunc("PUT /api/retention", s.authed(s.handleSaveRetention))
+	mux.HandleFunc("POST /api/retention/preview", s.authed(s.handlePreviewRetention))
+	// The cleanup as a built-in job; not tied to the Jobs module, so it can always be seen and stopped.
+	mux.HandleFunc("GET /api/system-jobs", s.authed(s.handleSystemJobs))
+	mux.HandleFunc("GET /api/system-jobs/{key}/runs", s.authed(s.handleSystemJobRuns))
+	mux.HandleFunc("PATCH /api/system-jobs/{key}", s.authed(s.handlePatchSystemJob))
+	mux.HandleFunc("POST /api/system-jobs/{key}/run", s.authed(s.handleRunSystemJob))
 
 	// Dashboard layout and density, shared by everyone on this Rexus (anyone reads, owner / admin changes)
 	mux.HandleFunc("GET /api/dashboard/locations", s.authed(s.handleDestinationLocations))
