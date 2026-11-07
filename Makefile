@@ -1,5 +1,5 @@
 
-.PHONY: build web go test dev-db dev-api dev-web up down logs clean
+.PHONY: build web go test dev dev-db dev-api dev-web dev-logs dev-down dev-reset up down logs clean
 
 ## build: build UI + single binary into ./bin/rexus
 build: web go
@@ -13,15 +13,30 @@ go:
 test:
 	go vet ./... && go test ./...
 
-## Local development (3 terminals): make dev-db, make dev-api, make dev-web
+## Local development — all in Docker (docker-compose.dev.yml), nothing installed on the host.
+## make dev: DB + API (:8080) + UI (:5173)   make dev-down: stop (keeps data)   make dev-reset: wipe dev data
+DEV = docker compose -f docker-compose.dev.yml
+
+dev:
+	$(DEV) up -d
+
 dev-db:
-	docker compose up postgres
+	$(DEV) up -d postgres
 
 dev-api:
-	REXUS_ENV=development go run ./cmd/rexus serve
+	$(DEV) up -d api
 
 dev-web:
-	cd web && npm run dev
+	$(DEV) up -d web
+
+dev-logs:
+	$(DEV) logs -f
+
+dev-down:
+	$(DEV) down
+
+dev-reset:
+	$(DEV) down -v
 
 ## Docker: Rexus + Postgres
 up:

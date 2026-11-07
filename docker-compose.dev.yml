@@ -1,0 +1,70 @@
+# Development stack — everything runs in Docker, nothing is installed on the host.
+# Uses the dev settings in .env (REXUS_ENV=development, port 8080, dev master key).
+#
+#   docker compose -f docker-compose.dev.yml up -d      # or: make dev
+#   docker compose -f docker-compose.dev.yml logs -f    # or: make dev-logs
+#   docker compose -f docker-compose.dev.yml down       # or: make dev-down   (keeps data)
+#   docker compose -f docker-compose.dev.yml down -v    # also wipes dev DB + caches
+#
+#   API: http://localhost:8080      UI (hot reload): http://localhost:5173
+#
+# All containers and volumes belong to the `rexus-dev` project, so nothing is left loose.
+
+name: rexus-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rexus}
+      POSTGRES_DB: rexus
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rexus -d rexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Go API from the source in this folder. Restart it to pick up Go changes:
+  #   docker compose -f docker-compose.dev.yml restart api
+  api:
+    image: golang:1.26-alpine
+    working_dir: /src
+    command: ["go", "run", "./cmd/rexus", "serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/src
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+    environment:
+      REXUS_ENV: development
+      # The dev DB inside this stack; overrides DATABASE_URL from .env.
+      DATABASE_URL: postgres://rexus:${POSTGRES_PASSWORD:-rexus}@postgres:5432/rexus?sslmode=disable
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:5173:5173" # the web service shares this container's network
+
+  # Vite dev server with hot reload. It shares the api container's network, so its
+  # /api proxy to localhost:8080 reaches the API with no config change.
+  web:
+    image: node:22-alpine
+    working_dir: /web
+    command: ["sh", "-c", "npm ci && npx vite --host 0.0.0.0 --port 5173"]
+    network_mode: "service:api"
+    depends_on:
+      - api
+    volumes:
+      - ./web:/web
+      - node_modules:/web/node_modules # stays in Docker, never written to the host
+
+volumes:
+  pgdata:
+  gomod:
+  gocache:
+  node_modules:
